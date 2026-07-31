@@ -1,0 +1,10 @@
+.env
+.vscode/
+
+*/__pycache__/
+data/emnist/EMNIST/
+data/emnist/index/
+results/
+venv/
+weights/
+scripts/cluster/
