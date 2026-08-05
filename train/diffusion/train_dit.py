@@ -1,18 +1,23 @@
 import argparse
 import os
 from datetime import datetime as dt
+import wandb
+from tqdm import tqdm
+
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
+import torchvision.utils as tvu
 
 from utils.manage_project import get_config_str_dict, make_weight_and_result_dir, get_checkpoint_start_epoch_and_resume
 from utils.seed import seed_everything
 from utils.lr import get_lr_schedule, set_lr
 from models.dit import DiT_Llama
 from models.rf import RF
-from data.manage_dataset import get_image_data_dict
+from data.manage_dataset import get_confident_image_data_dict
 from data.modular_addition import Modular_Arithmetic_Dataset
+from classifier_models.manage_classifiers import get_classifier
 
 
 RANDOM_SEED = 46
@@ -31,7 +36,7 @@ if __name__ == '__main__':
         parser.add_argument("--patch_size", type=int, default=2, help="Patch size for the model")
         parser.add_argument("--model_size", type=str, default="S", help="S, M, L, XL")
         parser.add_argument("--prediction_target", type=str, choices=["x", "v", "epsilon"], help="DiT's prediction target provided to RF")
-        parser.add_argument("--noise_schedule", type=str, default="noise", help="RF noise schedule")
+        parser.add_argument("--noise_schedule", type=str, default="linear", help="RF noise schedule")
         parser.add_argument("--depth", type=int, default=10)
         parser.add_argument("--ffn_type", type=str, default="gelu", choices=["swiglu", "gelu"], help="Choose FFN type : swiglu, gelu")
         parser.add_argument("--use_ffn_sandwich", action="store_true", help="Use prepending ffn to self-attention")
@@ -75,8 +80,6 @@ if __name__ == '__main__':
         config_dict,
     )
     
-    
-    
     # Following GrokkingTransformer hyperparameters: d_model=128, num_heads=4, d_ff=512
     if args.model_size == "S":
         kwargs = dict(dim=128, n_layers=args.depth, n_heads=4, ffn_dim=512)
@@ -107,36 +110,164 @@ if __name__ == '__main__':
         start_epoch = 0
     
     # Needs Implementation!
-    classifier = None
-    source_data_confidence_threshold = 1.0
+    classifier = get_classifier(dataset_name=args.dataset_name).to(device)
         
-    source_img_data_dict = get_image_data_dict(
+    source_img_data_dict = get_confident_image_data_dict(
         args.dataset_name, args.p, args.num_images_per_class, 
         classifier, args.source_data_confidence_threshold,
     )
-    
     
     ds_train = Modular_Arithmetic_Dataset(
         p=args.p, split='train', train_fraction=args.train_fraction,
         num_images_per_class=args.num_images_per_class, img_data_dict=source_img_data_dict
     )
     ds_valid = Modular_Arithmetic_Dataset(
-        p=args.p, split='train', train_fraction=args.train_fraction,
+        p=args.p, split='valid', train_fraction=args.train_fraction,
         num_images_per_class=args.num_images_per_class, img_data_dict=source_img_data_dict
-    )
+    )    
+    
     dl_train = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True, drop_last=False, num_workers=4)
     dl_valid = DataLoader(ds_valid, batch_size=32, shuffle=False, drop_last=False, num_workers=4)
+        
+    save_weight_freq = args.sample_freq * 5
+    curr_max_train_accuracy = -1
+    curr_max_valid_accuracy = -1        
+    tol = 0
+    for epoch in tqdm(range(start_epoch, start_epoch + args.epochs)):        
+        # Learning Rate Schedule setting
+        # curr_lr = get_lr_schedule(epoch, start_epoch + num_epochs, scaled_lr, warm_up=True)
+        curr_lr = get_lr_schedule(epoch, start_epoch + args.epochs, args.lr, args.lr_schedule_type, start_epoch=start_epoch)
+        set_lr(optimizer, curr_lr)
+        
+        
+        for i, (x_tgt, x_src, _, _, _) in enumerate(dl_train):
+            x_tgt, x_src = x_tgt.cuda(), x_src.cuda()
+            optimizer.zero_grad()
+            
+            loss = rf.forward(x_tgt, x_src) 
+            loss.backward()
+            grad_norm = clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+            if not args.dry_run:
+                wandb.log({
+                    "train_loss": loss.item(),
+                    "learning_rate": curr_lr,
+                    "grad_norm": grad_norm.item(),
+                    "epoch": epoch,
+                })
+
+        # Save checkpoint 
+        if epoch % save_weight_freq == 0:
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'max_train_accuracy' : curr_max_train_accuracy,
+                'max_valid_accuracy' : curr_max_valid_accuracy,
+            }
+            torch.save(checkpoint, os.path.join(weight_dir, f"checkpoint_epoch_{epoch}.pth"))
+        
+        # Evaluate performance
+        if epoch % args.sample_freq != 0:
+            continue
+
+        rf.model.eval()
+        with torch.no_grad():
+            _, x_src_train, label_tgt_train, _, _ = next(iter(dl_train))
+            _, x_src_valid, label_tgt_valid, _, _ = next(iter(dl_valid))
+            batch_size_train = x_src_train.size(0)
+            batch_size_valid = x_src_valid.size(0)
+            x_tgt_train = torch.randn(batch_size_train, 1, 32, 32).cuda()
+            x_tgt_valid = torch.randn(batch_size_valid, 1, 32, 32).cuda()
+            x_src_train, label_tgt_train = x_src_train.cuda(), label_tgt_train.cuda()
+            x_src_valid, label_tgt_valid = x_src_valid.cuda(), label_tgt_valid.cuda()
+            images_train = rf.sample(x_tgt_train, x_src_train)
+            images_valid = rf.sample(x_tgt_valid, x_src_valid)
+            
+            # Evaluate on Training data
+            logits = classifier(images_train[-1].detach())
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+            
+            label_tgt = label_tgt_train.cpu().numpy()
+            train_accuracy = (preds == label_tgt).mean()
+
+            # Evaluate on Validation data
+            logits = classifier(images_valid[-1].detach())
+            preds = torch.argmax(logits, dim=1).cpu().numpy()
+                            
+            label_tgt = label_tgt_valid.cpu().numpy()
+            valid_accuracy = (preds == label_tgt).mean()
+        
+            # Report on wandb
+            if not args.dry_run:
+                wandb.log({
+                    "Train Accuracy": train_accuracy,
+                    "Valid Accuracy": valid_accuracy,
+                    "epoch": epoch,
+                })
+            
+            # Save best performing checkpoint
+            if valid_accuracy > 0.8 and valid_accuracy > curr_max_valid_accuracy:
+                checkpoint = {
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'max_train_accuracy' : curr_max_train_accuracy,
+                    'max_valid_accuracy' : curr_max_valid_accuracy,
+                }
+                torch.save(checkpoint, os.path.join(weight_dir, f"model_best.pth"))        
+                
+            # Save image when [train, valid]-accuracy increase by 5%p or in save_weight_freq
+            if (
+                train_accuracy - curr_max_train_accuracy > 0.05 or \
+                valid_accuracy - curr_max_valid_accuracy > 0.05 or \
+                epoch % save_weight_freq == 0
+            ):  
+                num_vis = 4
+                # Concat x_src (B,1,32,64) and image_<> (B,1,32,32)
+                result_train = torch.cat(
+                    [x_src_train[:num_vis], images_train[-1][:num_vis]], dim=3
+                )  # (num_vis, 1, 32, 96)
+                result_valid = torch.cat(
+                    [x_src_valid[:num_vis], images_valid[-1][:num_vis]], dim=3
+                )  # (num_vis, 1, 32, 96)
+                tvu.save_image(result_train, f"{result_dir}/sample_{epoch}_train(trn_{train_accuracy:.2f}-val_{valid_accuracy:.2f}).png", nrow=1)
+                tvu.save_image(result_valid, f"{result_dir}/sample_{epoch}_valid(trn_{train_accuracy:.2f}-val_{valid_accuracy:.2f}).png", nrow=1)
+                curr_max_train_accuracy = max(curr_max_train_accuracy, train_accuracy)
+                curr_max_valid_accuracy = max(curr_max_valid_accuracy, valid_accuracy)        
+            
+            # Early Stopping Exit!
+            if valid_accuracy >= 0.99:
+                tol += 1
+                if tol > 25:
+                    checkpoint = {
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'max_train_accuracy' : curr_max_train_accuracy,
+                        'max_valid_accuracy' : curr_max_valid_accuracy,
+                    }
+                    torch.save(checkpoint, os.path.join(weight_dir, f"model_final.pth"))                      
+                    
+                    if not args.no_wandb_record:
+                        wandb.finish()
+                    exit()
+            else:
+                tol = 0
+            
+        rf.model.train()
+        
+
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'max_train_accuracy' : curr_max_train_accuracy,
+        'max_valid_accuracy' : curr_max_valid_accuracy,
+    }
+    torch.save(checkpoint, os.path.join(weight_dir, f"model_final.pth"))   
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    print("fin.")
+    if not args.dry_run:
+        wandb.finish()
+        

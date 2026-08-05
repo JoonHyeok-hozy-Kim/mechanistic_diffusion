@@ -108,7 +108,7 @@ def get_checkpoint_and_resume(prev_weights_dir, optimizer, model):
 def get_config_str_dict(args):
     config_dict = {}
     config_str_list = []
-    if args.dry_run:
+    if "dry_run" in args and args.dry_run:
         config_str_list.append("dry_run")
     print(f'{" Config ":-^80}')
     for arg_key, arg_val in vars(args).items():
@@ -117,11 +117,13 @@ def get_config_str_dict(args):
                 
         if arg_key in (
             "generative_model_path", "classifier_weights_path", "output_dir", 
-            "epochs", "batch_size", "sample_freq", "dry_run", "resume_run_url",
+            "epochs", "batch_size", "sample_freq", "dry_run", "resume_wandb_url",
+            "source_data_confidence_threshold", 
         ):
             continue
         if type(arg_val) == bool:
-            config_str_list.append(f"{arg_key}")
+            continue
+            # config_str_list.append(f"{arg_key}")
         else:
             config_str_list.append(f"{arg_key}_{arg_val}")    
     
@@ -152,3 +154,13 @@ def get_checkpoint_start_epoch_and_resume(prev_weights_dir, optimizer, model):
     print(f"=> Resuming from epoch {start_epoch}")
     
     return start_epoch
+
+
+
+
+def make_result_dir(in_result_dir, settings_str):
+    now_str = dt.now().strftime("%y%m%d_%H%M%S")    
+    ret_result_dir = os.path.join(in_result_dir, f"{now_str}-{settings_str}")
+    os.makedirs(ret_result_dir, exist_ok=True)
+    
+    return ret_result_dir

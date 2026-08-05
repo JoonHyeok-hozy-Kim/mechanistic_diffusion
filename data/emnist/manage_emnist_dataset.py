@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 import json
+from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -13,12 +14,57 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+EMNIST_PATH = 'data/emnist'
 MAX_EMNIST_NUM_CLASSES = 35     # Max num classes excluding 'O' (cf. Duplicacy with '0')
 
+
 def get_confident_emnist_image_data_dict(num_classes, num_images_per_class, classifier, confidence_threshold, data_root_dir, img_height, img_width):
-    ds_emnist_transformed_all = get_emnist_image_data_dict(num_classes, data_root_dir, img_height, img_width)
+    device = next(classifier.parameters()).device
     
-    raise NotImplementedError("Needs further implementation")
+    ds_emnist_transformed_all = get_emnist_image_data_dict(num_classes, data_root_dir, img_height, img_width)
+    dl_emnist_transformed_all = DataLoader(ds_emnist_transformed_all, batch_size=128, shuffle=False)
+
+    all_confidences = []
+    all_is_correct = []
+    
+    # Get confidences on the true label and correct prediction masks
+    with torch.no_grad():
+        for images, labels in tqdm(dl_emnist_transformed_all, desc="Calculating Confidence"):
+            images = images.to(device)
+            outputs = classifier(images)     # (B, num_classes)
+            probs = torch.softmax(outputs, dim=1)   # (B, num_classes)
+            
+            confidences = probs.gather(1, labels.to(device).unsqueeze(1)).squeeze(1)  # (B, ) : confidence for the true class
+            predictions = torch.argmax(probs, dim=1)    # (B, )           
+                
+            is_correct = (predictions == labels.to(device))
+            all_confidences.append(confidences.cpu())
+            all_is_correct.append(is_correct.cpu())
+    
+    final_confidences = torch.cat(all_confidences)
+    final_is_correct = torch.cat(all_is_correct)
+    true_labels = ds_emnist_transformed_all.tensors[1]
+    
+    top_k_indices_by_label = {}
+    for class_idx in range(num_classes):
+        class_mask = (true_labels == class_idx) & final_is_correct & (final_confidences >= confidence_threshold)
+        class_indices = torch.where(class_mask)[0]
+        class_confidences = final_confidences[class_indices]
+        
+        # Top-k among class indices!
+        assert num_images_per_class <= len(class_confidences), f"Not enough confident images for class {class_idx}: required {num_images_per_class}, found {len(class_confidences)}"
+        _, topk_indices = torch.topk(class_confidences, k=num_images_per_class)        
+        top_k_indices_by_label[class_idx] = class_indices[topk_indices]
+    
+    # List of single image tensors
+    letter_images = {}
+    for label, indices in top_k_indices_by_label.items():
+        curr_list = []
+        for img in ds_emnist_transformed_all.tensors[0][indices]:
+            curr_list.append(img)
+        letter_images[label] = curr_list
+    
+    return letter_images
 
 
 def get_emnist_image_data_dict(num_classes, data_root_dir, img_height, img_width):
@@ -32,42 +78,27 @@ def get_emnist_image_data_dict(num_classes, data_root_dir, img_height, img_width
     
     all_images = []
     all_labels = []
+    idx_O = 10 + int(ord('O') - ord('A'))
     
     # Use alphabets only.
-    if num_classes <= 26:
-        num_arithmetics = 10
-        target_labels = list(range(num_arithmetics, num_arithmetics + num_classes)) # Exclude arithmetic characters : 0~9
-        label_map = {old_label: new_label for new_label, old_label in enumerate(target_labels)}
-
-        for old_label in range(num_arithmetics, num_arithmetics + num_classes):
-            if old_label in label_index_dict:
-                target_indices_by_label = label_index_dict[old_label]
-                
-                imgs = ds_emnist_raw_balanced.data[target_indices_by_label].cpu()                   # (B, H, W)    where H=W=28
-                imgs_transformed = apply_batch_transform(imgs, img_height, img_width, swap_hw=True) # (B, C, W, H) where C=1, H=W=32
-                
-                new_label = label_map[old_label]
-                labels = torch.full((len(imgs_transformed),), new_label, dtype=torch.long)  # (B, )
-                
-                all_images.append(imgs_transformed)
-                all_labels.append(labels)
-    # Use numeric digit as well. Exclude 'O' considering similarity with '0'
-    elif num_classes <= MAX_EMNIST_NUM_CLASSES:
-        capital_O_idx = 10 + int(ord('O') - ord('A'))
-        for label_idx in range(num_classes):
-            adj_label_idx = label_idx if label_idx < capital_O_idx else label_idx + 1
-            target_indices_by_label = label_index_dict[adj_label_idx]
-            
-            imgs = ds_emnist_raw_balanced.data[target_indices_by_label].cpu()                   # (B, H, W)    where H=W=28
-            imgs_transformed = apply_batch_transform(imgs, img_height, img_width, swap_hw=True) # (B, C, W, H) where C=1, H=W=32
-            
-            labels = torch.full((len(imgs_transformed),), label_idx, dtype=torch.long)  # (B, )
-            
-            all_images.append(imgs_transformed)
-            all_labels.append(labels)
-    else:
+    if num_classes > 35:
         raise ValueError(f"num_classes greater than {MAX_EMNIST_NUM_CLASSES}. (input num_clases={num_classes})")
-
+    
+    for label_idx in range(num_classes):
+        # adj_label_idx = label_idx + 1       # Skip '0' for confusion with 'O'     
+           
+        # Skip 'O' for confusion with '0'
+        if label_idx >= idx_O:
+            adj_label_idx = label_idx + 1
+        else:
+            adj_label_idx = label_idx
+        
+        target_indices_by_label = label_index_dict[adj_label_idx]
+        imgs = ds_emnist_raw_balanced.data[target_indices_by_label].cpu()                    # (B, W, H)    where H=W=28
+        imgs_transformed = apply_batch_transform(imgs, img_height, img_width, swap_hw=True)  # (B, C, H, W) where C=1, H=W=32
+        labels = torch.full((len(imgs_transformed),), label_idx, dtype=torch.long)  # (B, )
+        all_images.append(imgs_transformed)
+        all_labels.append(labels)
     
     final_images = torch.cat(all_images, dim=0) # (N, C, H, W) where N = B * num_classes
     final_labels = torch.cat(all_labels, dim=0) # (N, )
@@ -77,8 +108,8 @@ def get_emnist_image_data_dict(num_classes, data_root_dir, img_height, img_width
 
 
 
-def get_emnist_dataset_index(dataset, emnist_path, split='balanced'):
-    index_path = os.path.join(emnist_path, 'index')
+def get_emnist_dataset_index(dataset, data_root_dir, split='balanced'):
+    index_path = os.path.join(data_root_dir, 'index')
     index_file_name = os.path.join(index_path, f'emnist_index_{split}.txt')
     
     if os.path.exists(index_file_name):
@@ -113,6 +144,7 @@ def apply_batch_transform(raw_tensor, img_height, img_width, swap_hw=True):
     x = F.interpolate(x, size=(img_height, img_width), mode='bilinear', align_corners=False)
     if swap_hw:
         x = x.permute(0, 1, 3, 2)   # (B, C, H, W) -> (B, C, W, H)
+        
     x = (x / 127.5) - 1.0  # Normalize to [-1, 1]
     return x
 

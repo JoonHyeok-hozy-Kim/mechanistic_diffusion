@@ -1,10 +1,13 @@
 .env
 .vscode/
 
-*/__pycache__/
+__pycache__/
 data/emnist/EMNIST/
 data/emnist/index/
+data/kmnist/KMNIST/
+logs/
 results/
 venv/
+wandb/
 weights/
 scripts/cluster/

@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 import numpy as np
+from abc import ABC, abstractmethod
 
 
 class Modular_Arithmetic_Dataset(Dataset):
@@ -42,6 +43,7 @@ class Modular_Arithmetic_Dataset(Dataset):
             self.data = all_pairs            
         else:        
             # Split into train/val at the group level to maintain symmetry
+            np.random.seed(42)
             group_keys = list(pair_groups.keys())
             np.random.shuffle(group_keys)
             train_size = int(train_fraction * len(group_keys))
@@ -49,18 +51,16 @@ class Modular_Arithmetic_Dataset(Dataset):
             # Collect pairs based on group assignment
             if split == 'train':
                 train_groups = set(group_keys[:train_size])
-                self.data = [pair for key, group in pair_groups.items() 
-                            if key in train_groups for pair in group]
+                self.data = [pair for key, group in pair_groups.items() if key in train_groups for pair in group]
             else:
                 val_groups = set(group_keys[train_size:])
-                self.data = [pair for key, group in pair_groups.items() 
-                            if key in val_groups for pair in group]
+                self.data = [pair for key, group in pair_groups.items() if key in val_groups for pair in group]
     
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        actual_index = self.get_actual_index(idx)
+        actual_index = self._get_actual_index(idx)
         a, b, result = self.data[actual_index]
         
         # Randomly sample font variation for each character independently
@@ -84,10 +84,62 @@ class Modular_Arithmetic_Dataset(Dataset):
         label_b = torch.tensor(b, dtype=torch.long)
         return img_tgt, img_src, label_tgt, label_a, label_b
     
-    def get_actual_index(self, idx):
+    def _get_actual_index(self, idx):
         return idx % len(self.data)
     
     def get_num_data(self, idx):
-        actual_idx = self.get_actual_index(idx)
+        actual_idx = self._get_actual_index(idx)
         return self.data[actual_idx]
+
+
+class Sorted_Modular_Arithmetic_Dataset(Modular_Arithmetic_Dataset, ABC):
+    def __init__(self, p=23, split='train', train_fraction=0.3, num_images_per_class=1, img_data_dict=None):
+        super().__init__(p, split, train_fraction, num_images_per_class, img_data_dict)
+        self.grids = {'super': {}, 'self': {}}
+        self._generate_grid()
+    
+    
+    def _generate_grid(self):
+        pass
+    
+    
+    def _get_super_idx(self, idx):
+        idx = self._get_actual_index(idx)
+        pair = self.grids['self'][idx]
+        return self.grids['super'][pair]        
+    
+    
+    def __getitem__(self, idx):
+        return super().__getitem__(self._get_super_idx(idx))
+    
+    
+    def get_num_data(self, idx):
+        return super().get_num_data(self._get_super_idx(idx))
+
+
+class Operand_Sorted_Modular_Arithmetic_Dataset(Sorted_Modular_Arithmetic_Dataset):
+    def _generate_grid(self):
+        for i_super, (a, b, res) in enumerate(self.data):
+            self.grids['super'][(a, b)] = i_super
+        
+        i_self = 0
+        for a in range(self.p):
+            for b in range(self.p):
+                self.grids['self'][i_self] = (a, b)
+                i_self += 1    
+
+
+class Result_Sorted_Modular_Arithmetic_Dataset(Sorted_Modular_Arithmetic_Dataset):
+    def _generate_grid(self):
+        for i_super, (a, b, res) in enumerate(self.data):
+            self.grids['super'][(a, b)] = i_super
+        
+        i_self = 0
+        for c in range(self.p):
+            for a in range(self.p):
+                b = c - a
+                if b < 0:
+                    b += self.p
+                self.grids['self'][i_self] = (a, b)
+                i_self += 1
     

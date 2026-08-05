@@ -4,15 +4,22 @@ import glob
 
 def get_best_checkpoint(weight_dir):
     assert os.path.exists(weight_dir), f"Invalid path : {weight_dir}"
-    final_format = weight_dir + "/model_final.pth"
-    model_final_file = glob.glob(final_format)
-    assert not model_final_file, f"Final already exists at {weight_dir}"
     
     best_format = weight_dir + "/model_best.pth"
     model_best_file = glob.glob(best_format)
-    assert model_best_file, f"Best model not found at {weight_dir}"
+    if model_best_file:
+        return model_best_file[0]
+    else:
+        print(f"Best model not found at {weight_dir}")
     
-    return model_best_file[0]
+    final_format = weight_dir + "/model_final.pth"
+    model_final_file = glob.glob(final_format)
+    if model_final_file:
+        return model_final_file[0]
+    else:
+        print(f"Final model not found at {weight_dir}")
+    
+    raise FileNotFoundError(f"No feasible weight found at : {weight_dir}")
 
 
 def get_wandb_run_info(run_url):

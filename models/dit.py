@@ -91,10 +91,11 @@ class TransformerBlock(nn.Module):
         self.use_ffn_residual = use_ffn_residual
 
         # adaLN_modulation output size: 6*dim for full block, 3*dim for only attention
-        self.adaln_output_dim = 9 * dim if use_ffn_sandwich else 6
+        self.num_adaln_chunks = 9 if use_ffn_sandwich else 6
+        # self.adaln_output_dim = self.num_adaln_chunks * dim
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(min(dim, 1024), self.adaln_output_dim, bias=True),
+            nn.Linear(min(dim, 1024), self.num_adaln_chunks * dim, bias=True),
         )
         
         # Hookpoints for Prepended FFN in FFN-Sandwich Case
@@ -120,15 +121,16 @@ class TransformerBlock(nn.Module):
             shift_msa, scale_msa, gate_msa, \
                 shift_mlp_in, scale_mlp_in, gate_mlp_in,  \
                     shift_mlp_out, scale_mlp_out, gate_mlp_out  = (
-                self.adaLN_modulation(adaln_input).chunk(self.adaln_output_dim, dim=1)
-            )
+                        self.adaLN_modulation(adaln_input).chunk(self.num_adaln_chunks, dim=1)
+                    )
         else:
             shift_mlp_in, scale_mlp_in, gate_mlp_in = None, None, None
-            shift_msa, scale_msa, gate_msa, shift_mlp_out, scale_mlp_out, gate_mlp_out = (
-                self.adaLN_modulation(adaln_input).chunk(self.adaln_output_dim, dim=1)
-            )
+            shift_msa, scale_msa, gate_msa, \
+                shift_mlp_out, scale_mlp_out, gate_mlp_out = (
+                    self.adaLN_modulation(adaln_input).chunk(self.num_adaln_chunks, dim=1)
+                )
         
-        # FFN-IN
+        # Hooked FFN-IN
         if self.use_ffn_sandwich:
             if self.use_layer_norm:
                 x = self.hook_ffn_in_norm(self.ffn_in_norm(x))
@@ -150,19 +152,19 @@ class TransformerBlock(nn.Module):
         attn = self.hook_attn(self.attention(x_adaLN, freqs_cis))
         x = self.hook_attn_gating(x + gate_msa.unsqueeze(1) * attn)
         
-        # Hooked feed-forward block
+        # Hooked FFN-OUT
         if self.use_layer_norm:
-            x = self.hook_ffn_out_norm(self.ffn_norm(x))
+            x = self.hook_ffn_out_norm(self.ffn_out_norm(x))
         else:
             x = self.hook_ffn_out_norm(x)
-        ffn_adaLN = self.hook_ffn_out_adaLN(modulate(x, shift_mlp_out, scale_mlp_out))
-        ffn = self.hook_ffn_out(self.feed_forward(ffn_adaLN))
+        ffn_out_adaLN = self.hook_ffn_out_adaLN(modulate(x, shift_mlp_out, scale_mlp_out))
+        ffn_out = self.hook_ffn_out(self.feed_forward_out(ffn_out_adaLN))
         
         # FFN Residual Connection
         if self.use_ffn_residual:
-            x = self.hook_ffn_out_gating(x + gate_mlp_out.unsqueeze(1) * ffn)
+            x = self.hook_ffn_out_gating(x + gate_mlp_out.unsqueeze(1) * ffn_out)
         else:
-            x = self.hook_ffn_out_gating(gate_mlp_out.unsqueeze(1) * ffn)
+            x = self.hook_ffn_out_gating(gate_mlp_out.unsqueeze(1) * ffn_out)
 
         return x
 
@@ -324,6 +326,8 @@ class DiT_Llama(nn.Module):
             ]
         )
         self.final_layer = FinalLayer(dim, patch_size, self.out_channels)
+        self.dim = dim
+        self.n_heads = n_heads
         self.freqs_cis = None  # Will be computed dynamically based on input size
         
         # Give name to all HookPoints in its descendant modules
@@ -380,9 +384,9 @@ class DiT_Llama(nn.Module):
         
         self.freqs_cis = self.freqs_cis.to(x.device)
         
-        x = self.x_embedder(x)  # (B, H//p*W//p, dim)
-        t = self.t_embedder(t)  # (N, D)
-        adaln_input = t.to(x.dtype)
+        x = self.x_embedder(x)                  # (B, H//p*W//p, dim)
+        t_embedded = self.t_embedder(t)         # (N, D)
+        adaln_input = t_embedded.to(x.dtype)
 
         for layer in self.layers:
             x = layer(x, self.freqs_cis, adaln_input=adaln_input)
@@ -390,13 +394,15 @@ class DiT_Llama(nn.Module):
         x = self.final_layer(x, adaln_input)
         x = self.unpatchify(x)  # (N, out_channels, H, 3*W)
         
+        network_out_x = x[:, :src_channels, :src_height, :src_width]
+        
         if self.prediction_target == "v":
             '''
             Outut : f(z_t, t) = v : v-prediction
             '''            
-            return x[:, :src_channels, :src_height, :src_width]
+            return network_out_x
         else:
-            x_diff = input_x - x[:, :src_channels, :src_height, :src_width]     # z_t - f(z_t, t)
+            x_diff = input_x - network_out_x     # z_t - f(z_t, t)
             t_reshaped = t.view(-1, *([1] * (x_diff.ndim - 1)))
             
             if self.prediction_target == "x":
