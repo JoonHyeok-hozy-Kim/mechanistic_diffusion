@@ -6,7 +6,7 @@ import random
 import os
 
 
-def get_fourier_basis_and_names(p):    
+def get_fourier_basis_and_names(p, latex=False):    
     fourier_basis = []
     fourier_basis.append(torch.ones(p)/np.sqrt(p))    # Constant term for 2-degree Fourier Basis
     fourier_basis_names = ['C']
@@ -16,8 +16,12 @@ def get_fourier_basis_and_names(p):
         fourier_basis.append(torch.sin(2 * freq * torch.pi / p * torch.arange(p)))    # sin(2k(pi)/P * a)
         fourier_basis[-2]/=fourier_basis[-2].norm()
         fourier_basis[-1]/=fourier_basis[-1].norm()
-        fourier_basis_names.append(f'cos_{freq}')
-        fourier_basis_names.append(f'sin_{freq}')
+        if latex:
+            fourier_basis_names.append(f'\\cos {freq}')
+            fourier_basis_names.append(f'\\sin {freq}')
+        else:
+            fourier_basis_names.append(f'cos_{freq}')
+            fourier_basis_names.append(f'sin_{freq}')
     fourier_basis = torch.stack(fourier_basis, dim=0).to('cuda')    # (1+2*num_freqs, P)
     
     return fourier_basis, fourier_basis_names
@@ -30,8 +34,8 @@ def get_d2_indices_by_frequency(p, k, latex=False):
     sin_k = 2*k         # 2, 4, 6, ..., 2*num_freqs   (k starts from 1)
     
     if latex:
-        cos_k_str = f"\\cos(w_{k}"
-        sin_k_str = f"\\sin(w_{k}"
+        cos_k_str = f"\\cos(w_{{{k}}}"
+        sin_k_str = f"\\sin(w_{{{k}}}"
     else:
         cos_k_str = f"cos(w_{k}"
         sin_k_str = f"sin(w_{k}"

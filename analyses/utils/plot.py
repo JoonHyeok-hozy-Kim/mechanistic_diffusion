@@ -878,3 +878,4 @@ def save_full_layers_grid(layer_activations, labels, save_dir, time_step, var_na
     
     plt.savefig(save_dir, dpi=80)
     plt.close(fig)
+    

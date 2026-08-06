@@ -4,7 +4,6 @@ from datetime import datetime as dt
 
 import torch
 from torch.utils.data import DataLoader
-import torchvision.utils as tvu
 
 from utils.manage_project import get_config_str_dict, make_result_dir
 from utils.seed import seed_everything
@@ -20,13 +19,13 @@ from analyses.utils.plot import save_patch_grid_plot_single_variable
 RANDOM_SEED = 46
 
 
-def generate_projection_fve_table(p, activation, dataset, save_dir):
+def generate_projection_fve_table(p, activation, dataset, save_dir, latex=False):
     assert len(activation.shape) == 3, f"Unexpected input activation shape of {activation.shape}. (Expected a single patch (p, p, hidden_dim))"
     
     device = activation.device
     hidden_dim = activation.shape[2]
         
-    fourier_basis_d1, _ = get_fourier_basis_and_names(p)
+    fourier_basis_d1, _ = get_fourier_basis_and_names(p, latex=latex)
     num_freqs = (p - 1) // 2
     
     c_extracted = torch.clone(activation).to(device)
@@ -41,21 +40,23 @@ def generate_projection_fve_table(p, activation, dataset, save_dir):
     
     f = open(save_dir, "w", encoding="utf-8")
     # f.write(f"W_L Component,Fourier Components on u_k^T MLP(a,b) and v_k^T MLP(a,b),FVE\n")
-    f.write(f"|W_L|u_k^T MLP(a,b) and v_k^T MLP(a,b)|FVE|\n")
+    if latex:
+        f.write(f"|$W_L$|$u_k^\\top \\text{{MLP}}(a,b) \\text{{ and }} v_k^\\top \\text{{MLP}}(a,b)$|FVE|\n")
+    else:
+        f.write(f"|W_L|u_k^T MLP(a,b) and v_k^T MLP(a,b)|FVE|\n")
     f.write(f"|:-:|:-:|:-:|\n")
         
     for k in range(1, num_freqs+1):
-        frequencies = {
-            2*k - 1 : f'\\cos(w_{k})',
-            2*k : f'\\sin(w_{k})',
-        }
+        frequencies_dict = {}
+        frequencies_dict[2*k - 1] = f'$\\cos(w_{{{k}}})$' if latex else f'cos(w_{k})'
+        frequencies_dict[2*k] = f'$\\sin(w_{{{k}}})$' if latex else f'sin(w_{k})'
         
-        target_indices_and_desc = get_d2_indices_by_frequency(args.p, k)
+        target_indices_and_desc = get_d2_indices_by_frequency(args.p, k, latex=latex)
         target_indices = [idx for idx, desc in target_indices_and_desc]
         target_indices_desc = [desc for idx, desc in target_indices_and_desc]
         
-        for curr_freq_idx in frequencies.keys():
-            f.write(f"|{frequencies[curr_freq_idx]}|")
+        for curr_freq_idx in frequencies_dict.keys():
+            f.write(f"|{frequencies_dict[curr_freq_idx]}|")
             
             curr_uv_ks_mlp = uv_ks_mlp[curr_freq_idx, :].unsqueeze(-1)    # (P_a, P_b, 1)
             
@@ -67,23 +68,47 @@ def generate_projection_fve_table(p, activation, dataset, save_dir):
             curr_freq_coeffs = d2_result[target_indices]
             two_d_fves_targets = d2_fves[target_indices]
             
-            if frequencies[curr_freq_idx].split("(")[0] == '\\cos':
-                f.write(f"{curr_freq_coeffs[4]:.2f}{target_indices_desc[4]}")   # cos*cos
+            col_proj_txt_list = []            
+            if 'cos' in frequencies_dict[curr_freq_idx].split("(")[0]:
+                col_proj_txt_list.append(f"{curr_freq_coeffs[4]:,.2f}{target_indices_desc[4]}")  # cos*cos
                 if curr_freq_coeffs[7] >= 0:
-                    f.write("+")
-                f.write(f"{curr_freq_coeffs[7]:.2f}{target_indices_desc[7]}")   # sin*sin
-                f.write("|")                
-                f.write(f"{(two_d_fves_targets[4]+two_d_fves_targets[7]):.2f}")
-                f.write("|\n")
-                
+                    col_proj_txt_list.append("+")
+                col_proj_txt_list.append(f"{curr_freq_coeffs[7]:,.2f}{target_indices_desc[7]}")  # sin*sin
+                col_fve_txt = f"{(two_d_fves_targets[4]+two_d_fves_targets[7]):.2f}"
             else:
-                f.write(f"{curr_freq_coeffs[5]:.2f}{target_indices_desc[5]}")   # cos*sin
+                col_proj_txt_list.append(f"{curr_freq_coeffs[5]:,.2f}{target_indices_desc[5]}")  # cos*sin
                 if curr_freq_coeffs[6] >= 0:
-                    f.write("+")
-                f.write(f"{curr_freq_coeffs[6]:.2f}{target_indices_desc[6]}")   # sin*cos
-                f.write("|")                
-                f.write(f"{(two_d_fves_targets[5]+two_d_fves_targets[6]):.2f}")
-                f.write("|\n")                
+                    col_proj_txt_list.append("+")
+                col_proj_txt_list.append(f"{curr_freq_coeffs[6]:,.2f}{target_indices_desc[6]}")  # sin*cos
+                col_fve_txt = f"{(two_d_fves_targets[5]+two_d_fves_targets[6]):.2f}"
+            
+            if latex:
+                col_proj_txt_list.insert(0, "$")
+                col_proj_txt_list.append("$")
+            
+            col_proj_txt = ''.join(col_proj_txt_list)
+            f.write(col_proj_txt)
+            f.write("|")
+            f.write(col_fve_txt)
+            f.write("|\n")
+            
+            # if 'cos' in frequencies[curr_freq_idx].split("(")[0]:
+            #     f.write(f"{curr_freq_coeffs[4]:.2f}{target_indices_desc[4]}")   # cos*cos
+            #     if curr_freq_coeffs[7] >= 0:
+            #         f.write("+")
+            #     f.write(f"{curr_freq_coeffs[7]:.2f}{target_indices_desc[7]}")   # sin*sin
+            #     f.write("|")                
+            #     f.write(f"{(two_d_fves_targets[4]+two_d_fves_targets[7]):.2f}")
+            #     f.write("|\n")
+                
+            # else:
+            #     f.write(f"{curr_freq_coeffs[5]:.2f}{target_indices_desc[5]}")   # cos*sin
+            #     if curr_freq_coeffs[6] >= 0:
+            #         f.write("+")
+            #     f.write(f"{curr_freq_coeffs[6]:.2f}{target_indices_desc[6]}")   # sin*cos
+            #     f.write("|")                
+            #     f.write(f"{(two_d_fves_targets[5]+two_d_fves_targets[6]):.2f}")
+            #     f.write("|\n")                
     f.close()
 
 
@@ -112,12 +137,14 @@ if __name__ == '__main__':
         parser.add_argument("--use_rope_2d", action="store_true", help="Apply rope 2d on Attention layers")
         parser.add_argument("--use_ffn_residual", action="store_true", help="Use residual connection at FFN")
         # parser.add_argument("--epochs", type=int, default=1)
-        parser.add_argument("--batch_size", type=int, default=512)
+        # parser.add_argument("--batch_size", type=int, default=512)
         parser.add_argument("--sample_steps", type=int, default=1)
         # parser.add_argument("--sample_freq", type=int, default=1)
         # parser.add_argument("--dry_run", action="store_true", help="Do not recored to wandb")
         # parser.add_argument("--resume_wandb_url", type=str, default=None, help="URL of the run to resume")
         parser.add_argument("--correct_result_img", action="store_true", help="Correct result image at position c")
+        parser.add_argument("--latex_formatted_out", action="store_true", help="Latex formatted output")
+        parser.add_argument("--ffn_out_pre_act_only", action="store_true", help="Target only the FFN out Pre-activation layer.")
         return parser.parse_args()
     args = parse_args()    
     
@@ -241,8 +268,9 @@ if __name__ == '__main__':
         if layer_name in (
                 'layers.0.hook_attn_norm', 'layers.0.hook_attn_adaLN'   # (B, S, D)
             ):               
-            # print("==> skip")
-            # continue
+            if args.ffn_out_pre_act_only:
+                print("==> skip")
+                continue
             os.makedirs(layer_dir, exist_ok=True)
             
             hidden_dim = layer_activation.shape[2]
@@ -296,8 +324,9 @@ if __name__ == '__main__':
                 (layer_name.split("_")[-2] == "by" and layer_name.split("_")[-1] == 'head') or \
                 (layer_name.split("_")[1] == 'rope')
             ):                                                  # (B, num_patches * num_variables, num_heads, head_dim)
-            # print("==> skip")
-            # continue
+            if args.ffn_out_pre_act_only:
+                print("==> skip")
+                continue
             os.makedirs(layer_dir, exist_ok=True)
         
             num_heads, head_dim = layer_activation.shape[2:]  # num_heads, head_dim
@@ -349,9 +378,10 @@ if __name__ == '__main__':
             
         elif layer_name in (        # (P^2, H, S_query, S_key)
                 'layers.0.attention.hook_A_raw', 'layers.0.attention.hook_A_softmax'
-            ):         
-            # print("==> skip")
-            # continue
+            ):          
+            if args.ffn_out_pre_act_only:
+                print("==> skip")
+                continue
             os.makedirs(layer_dir, exist_ok=True)
             
             num_heads = layer_activation.shape[1]
@@ -410,9 +440,10 @@ if __name__ == '__main__':
                     )
             
                     
-        elif (layer_name == 'layers.0.attention.hook_Av'): # (P^2, num_heads, num_variables*num_patches, head_dim)
-            # print("==> skip")
-            # continue
+        elif (layer_name == 'layers.0.attention.hook_Av'): # (P^2, num_heads, num_variables*num_patches, head_dim) 
+            if args.ffn_out_pre_act_only:
+                print("==> skip")
+                continue
             os.makedirs(layer_dir, exist_ok=True)
             
             num_heads = model.layers[0].attention.n_heads
@@ -468,12 +499,10 @@ if __name__ == '__main__':
                 )
 
             
-        else:
-            # print("==> skip")
-            # continue
-            # if layer_name != 'layers.0.feed_forward_out.hook_pre_activation':
-            #     print("==> skip")
-            #     continue
+        else: 
+            if args.ffn_out_pre_act_only and layer_name != 'layers.0.feed_forward_out.hook_pre_activation':
+                print("==> skip")
+                continue
             os.makedirs(layer_dir, exist_ok=True)
             
             curr_dim = layer_activation.shape[2]
@@ -503,7 +532,7 @@ if __name__ == '__main__':
                         table_dir = os.path.join(fve_uv_k_proj_dir, layer_name)
                         os.makedirs(table_dir, exist_ok=True)
                         table_file_name = os.path.join(table_dir, f'var_{variable}-patch_{pdx}.md')
-                        generate_projection_fve_table(args.p, patch_d2_activation, ds_all, table_file_name)
+                        generate_projection_fve_table(args.p, patch_d2_activation, ds_all, table_file_name, args.latex_formatted_out)
                     
                     
                     # Degree one projection

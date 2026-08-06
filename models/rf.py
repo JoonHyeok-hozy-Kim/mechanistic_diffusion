@@ -33,43 +33,80 @@ class RF:
         texp = t.view([b, *([1] * len(x.shape[1:]))])
         z1 = torch.randn_like(x)
         
-        if self.noise_schedule == 'linear':
-            zt = (1 - texp) * x + texp * z1
-            target_v = z1 - x
+        # if self.noise_schedule == 'linear':
+        #     zt = (1 - texp) * x + texp * z1
+        #     target_v = z1 - x
             
-        elif self.noise_schedule == 'vp':
-            # VP (Variance Preserving) - Cosine Schedule
-            alpha_t = torch.cos(texp * math.pi / 2)
-            sigma_t = torch.sin(texp * math.pi / 2)
+        # elif self.noise_schedule == 'vp':
+        #     # VP (Variance Preserving) - Cosine Schedule
+        #     alpha_t = torch.cos(texp * math.pi / 2)
+        #     sigma_t = torch.sin(texp * math.pi / 2)
             
-            zt = alpha_t * x + sigma_t * z1
+        #     zt = alpha_t * x + sigma_t * z1
             
-            # dz/dt
-            target_v = - (math.pi / 2) * torch.sin(texp * math.pi / 2) * x + \
-                       (math.pi / 2) * torch.cos(texp * math.pi / 2) * z1
+        #     # dz/dt
+        #     target_v = - (math.pi / 2) * torch.sin(texp * math.pi / 2) * x + \
+        #                (math.pi / 2) * torch.cos(texp * math.pi / 2) * z1
                        
-        elif self.noise_schedule == 've':
-            sigma_max = 50.0  
+        # elif self.noise_schedule == 've':
+        #     sigma_max = 50.0  
             
-            # # Linear
-            # zt = x + (texp * sigma_max) * z1
-            # target_v = sigma_max * z1
+        #     # # Linear
+        #     # zt = x + (texp * sigma_max) * z1
+        #     # target_v = sigma_max * z1
             
-            # Non-linear
-            rho = 7.0
-            sigma_t = (texp ** rho) * sigma_max
-            zt = x + sigma_t * z1
-            target_v = rho * (texp ** (rho - 1.0)) * sigma_max * z1
+        #     # Non-linear
+        #     rho = 7.0
+        #     sigma_t = (texp ** rho) * sigma_max
+        #     zt = x + sigma_t * z1
+        #     target_v = rho * (texp ** (rho - 1.0)) * sigma_max * z1
             
-        else:
-            raise NotImplementedError(f"Noinse Schedule {self.noise_schedule} not implemented.")
+        # else:
+        #     raise NotImplementedError(f"Noinse Schedule {self.noise_schedule} not implemented.")
 
+        zt = self.inject_noise(x, z1, texp)
+        target_v = self.get_target_velocity_by_noise(x, z1, texp)
         vtheta = self.model(zt, t, cond)
         
         loss_unreduced = ((target_v - vtheta) ** 2).mean(dim=list(range(1, len(x.shape))))
         loss = (loss_unreduced * t).mean()  
         
         return loss
+    
+    
+    def inject_noise(self, x_src, noise, t_tensor, ve_sigma_max=50.0, ve_rho=7.0):
+        if self.noise_schedule == 'linear':                    
+            x_tgt = (1 - t_tensor) * x_src + (t_tensor) * noise
+        elif self.noise_schedule == 'vp':
+            # VP (Variance Preserving) - Cosine Schedule
+            alpha_t = math.cos(t_tensor * math.pi / 2)
+            sigma_t = math.sin(t_tensor * math.pi / 2)
+            
+            x_tgt = alpha_t * x_src + sigma_t * noise
+        elif self.noise_schedule == 've':            
+            # # Linear
+            # x_tgt = answer_img + (curr_noise_ratio * ve_sigma_max) * fixed_noise
+            
+            # Non-linear
+            sigma_t = (t_tensor ** ve_rho) * ve_sigma_max
+            x_tgt = x_src + sigma_t * noise
+        else:
+            raise NotImplementedError(f"Unexpected noise_schedule : {self.noise_schedule}")                    
+                        
+        return x_tgt
+    
+    
+    def get_target_velocity_by_noise(self, x_src, noise, t_tensor, ve_sigma_max=50.0, ve_rho=7.0):
+        if self.noise_schedule == 'linear':                    
+            return noise - x_src
+        elif self.noise_schedule == 'vp':
+            return - (math.pi / 2) * torch.sin(t_tensor * math.pi / 2) * x_src + \
+                       (math.pi / 2) * torch.cos(t_tensor * math.pi / 2) * noise
+        elif self.noise_schedule == 've':            
+            return ve_rho * (t_tensor ** (ve_rho - 1.0)) * ve_sigma_max * noise
+        else:
+            raise NotImplementedError(f"Unexpected noise_schedule : {self.noise_schedule}")                    
+               
 
     @torch.no_grad()
     def sample(self, z, cond, sample_steps=50):

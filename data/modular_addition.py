@@ -2,6 +2,8 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 from abc import ABC, abstractmethod
+from collections import defaultdict
+from random import shuffle, randint
 
 
 class Modular_Arithmetic_Dataset(Dataset):
@@ -142,4 +144,81 @@ class Result_Sorted_Modular_Arithmetic_Dataset(Sorted_Modular_Arithmetic_Dataset
                     b += self.p
                 self.grids['self'][i_self] = (a, b)
                 i_self += 1
+
+
+class Inference_All_Image_Modular_Arithmetic_Dataset(Dataset):
+    '''
+    Generate all possible N^2 pairs of operand images a and b for inference only.
+    When `correct_result_img` is true, it switches the result image to wrong one for the rectification
+    '''
+    def __init__(self, p, num_images_per_class, img_data_dict, correct_result_img=True):
+        self.p = p
+        self.num_images_per_class = num_images_per_class
+        self.img_data_dict = img_data_dict     
+        self.correct_result_img = correct_result_img
+        self.batch_repeat = num_images_per_class // self.p        
+        self.data = []
+        
+        image_pool_a = defaultdict(list)
+        image_pool_b = defaultdict(list)
+        for p_i in range(p):
+            for n_i in range(num_images_per_class):
+                image_pool_a[p_i].append((p_i, n_i))
+                image_pool_b[p_i].append((p_i, n_i))
+        for p_i, L in image_pool_a.items():
+            shuffle(L)
+            shuffle(image_pool_b[p_i])
+        
+        has_data = True
+        while has_data:
+            pairs = []
+            for p_a in range(p):
+                if len(image_pool_a[p_a]) == 0 or not has_data:
+                    has_data = False
+                    break
+                p_a_key = image_pool_a[p_a].pop(0)
+                for p_b in range(p):
+                    if len(image_pool_b[p_b]) == 0:
+                        has_data = False
+                        break                
+                    p_b_key = image_pool_b[p_b].pop(0)
+                    pairs.append([p_a, p_b, p_a_key, p_b_key])
+            if len(pairs) == p**2:
+                self.data.extend(pairs)
+        
+        assert len(self.data) // (p**2) == self.batch_repeat, f"Batch repeat ({self.batch_repeat}) does not comply with the actual data size ({len(self.data) // (p**2)}*{(p**2)})."
     
+    def __len__(self):
+        return len(self.data)  
+        
+    def __getitem__(self, idx):
+        a, b, p_a_key, p_b_key = self.data[idx]
+        truc_c = (a+b) % self.p
+        if self.correct_result_img:
+            ret_c = truc_c
+        else:
+            # Randomly chooose the wrong result label
+            offset = randint(1, self.p-1)
+            ret_c = (truc_c + offset) % self.p  
+        
+        img_a = self.img_data_dict[p_a_key[0]][p_a_key[1]]
+        img_b = self.img_data_dict[p_b_key[0]][p_b_key[1]]
+        
+        assert img_a.shape == img_b.shape == (1, 32, 32)
+        
+        avaliable_c_images = len(self.img_data_dict[ret_c])
+        c_idx = randint(0, avaliable_c_images-1)
+        img_tgt = self.img_data_dict[ret_c][c_idx]  # Shape: (1, 32, 32)
+        
+        # Concatenate along width dimension (dim=2) to get shape (1, 32, 64)
+        img_src = torch.cat([img_a, img_b], dim=2)
+        # assert img_src.shape == (1, 32, 64), f"Expected img_src shape (1, 32, 64), got {img_src.shape}"
+        label_tgt = torch.tensor(ret_c, dtype=torch.long)
+        label_a = torch.tensor(a, dtype=torch.long)
+        label_b = torch.tensor(b, dtype=torch.long)
+        return img_tgt, img_src, label_tgt, label_a, label_b
+    
+    def get_num_data(self, idx):
+        a, b, p_a_key, p_b_key = self.data[idx]
+        c = (a+b) % self.p
+        return [a, b, c]
