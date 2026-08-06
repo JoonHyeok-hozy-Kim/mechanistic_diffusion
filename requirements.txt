@@ -10,3 +10,4 @@ pillow
 h5py
 pytorch-msssim
 kagglehub
+huggingface_hub
