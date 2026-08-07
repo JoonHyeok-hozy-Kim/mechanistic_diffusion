@@ -31,7 +31,6 @@ if __name__ == '__main__':
         parser.add_argument("--output_dir", type=str, default="results/")
         parser.add_argument("--dataset_name", type=str, default="emnist", help="Dataset type. e.g. emnist, kmnist, two_dimensional")
         parser.add_argument("--p", type=int, default=97, help="Modulus for modular arithmetic (should be <= 97 for all characters: A-Z, a-z, 0-9, special chars)")
-        # parser.add_argument("--train_fraction", type=float, default=0.7)
         parser.add_argument("--num_images_per_class", type=int, default=256)
         parser.add_argument("--source_data_confidence_threshold", type=float, default=0.9, help="Confidence threshold for adding source image to the dataset")       
         parser.add_argument("--patch_size", type=int, default=2, help="Patch size for the model")
@@ -41,21 +40,11 @@ if __name__ == '__main__':
         parser.add_argument("--depth", type=int, default=10)
         parser.add_argument("--ffn_type", type=str, default="gelu", choices=["swiglu", "gelu"], help="Choose FFN type : swiglu, gelu")
         parser.add_argument("--use_ffn_sandwich", action="store_true", help="Use prepending ffn to self-attention")
-        # parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate for optimizer")
-        # parser.add_argument("--lr_schedule_type", type=str, default="wsd", choices=["wsd", "ws", "d", "cos"], help="Choose LR scheduler type")
-        # parser.add_argument("--weight_decay", type=float, default=10.0, help="Weight decay for optimizer")
         parser.add_argument("--use_layer_norm", action="store_true", help="Apply LayerNorm in Transformer and FinalLayer blocks")
         parser.add_argument("--use_rope_2d", action="store_true", help="Apply rope 2d on Attention layers")
         parser.add_argument("--use_ffn_residual", action="store_true", help="Use residual connection at FFN")
-        # parser.add_argument("--epochs", type=int, default=1)
-        # parser.add_argument("--batch_size", type=int, default=512)
         parser.add_argument("--sample_steps", type=int, default=50)
-        # parser.add_argument("--sample_freq", type=int, default=1)
-        # parser.add_argument("--dry_run", action="store_true", help="Do not recored to wandb")
-        # parser.add_argument("--resume_wandb_url", type=str, default=None, help="URL of the run to resume")
-        parser.add_argument("--correct_result_img", action="store_true", help="Correct result image at position c")
         parser.add_argument("--latex_formatted_out", action="store_true", help="Latex formatted output")
-        parser.add_argument("--ffn_out_pre_act_only", action="store_true", help="Target only the FFN out Pre-activation layer.")
         parser.add_argument("--plot_fve", action="store_true", help="Plot predictions and FVE barcharts.")
         parser.add_argument("--plot_pca", action="store_true", help="Plot PCA on every layer activations.")
         return parser.parse_args()
@@ -127,7 +116,7 @@ if __name__ == '__main__':
     
     ds_all = Inference_All_Image_Modular_Arithmetic_Dataset(
         p=args.p, num_images_per_class=args.num_images_per_class, 
-        img_data_dict=source_img_data_dict, correct_result_img=args.correct_result_img
+        img_data_dict=source_img_data_dict, correct_result_img=True,
     )
     len_data = len(ds_all.data)         
     dl_all = DataLoader(ds_all, batch_size=len_data, shuffle=False, drop_last=False, num_workers=0)    
@@ -166,7 +155,19 @@ if __name__ == '__main__':
     # Get idices of 1-degree bases and 2-degree bases with same frequences
     two_degree_idxes, two_degree_idxes_descs = get_indices_all_frequencies(args.p, latex=args.latex_formatted_out)  # (num_ks, num_2d_bases)  e.g. (11, 8) 
     indices_flattened = two_degree_idxes.flatten()  
-    desc_flattened = two_degree_idxes_descs.flatten()    
+    desc_flattened = two_degree_idxes_descs.flatten()
+    fve_target_layers = {
+        'layers.0.attention.hook_k': {
+            'target_var': 'b',
+            'store_idx': 0,
+            'bar_chart_title': f"Operand 'b' Attention K Layer FVE values",
+        },
+        'layers.0.feed_forward_out.hook_pre_activation': {
+            'target_var': 'c',
+            'store_idx': 1,
+            'bar_chart_title': f"Result 'c' FFN pre-GeLU Layer FVE values",
+        }        
+    }
     
     B = answer_img.size(0)
     dt = 1.0 / args.sample_steps
@@ -205,40 +206,37 @@ if __name__ == '__main__':
             
             # Record activations
             fve_activations = [[None, None] for _ in range(num_patches)]
+            fve_bar_chart_titles = [None, None]
             pca_activations = defaultdict(lambda: defaultdict(dict))
             
             for layer_name, curr_activation in cache.items():
                 if not isinstance(curr_activation, torch.Tensor):
                     continue                
                     
-                if args.plot_fve and \
-                    layer_name == 'layers.0.attention.hook_k' or layer_name == 'layers.0.feed_forward_out.hook_pre_activation':
-                        if layer_name == 'layers.0.attention.hook_k':
-                            target_var = 'a'
-                            vdx = variables.index(target_var)
-                            store_idx = 0
-                        else:
-                            target_var = 'c'
-                            vdx = variables.index(target_var)
-                            store_idx = 1
-                                        
-                        hidden_dim = curr_activation.shape[2]
-                        # batch_norm_activation = torch.clone(curr_activation)
-                        batch_norm_activation = torch.clone(curr_activation).reshape(ds_all.batch_repeat, args.p, args.p, num_patches * num_variables, -1)
-                        batch_norm_activation = torch.mean(batch_norm_activation, dim=0)    # (P, P, num_patches * num_tokens, D)
-                        var_activation = batch_norm_activation[:, :, patch_indices_by_variable[vdx]] # (P, P, num_patches, D)
-                        
-                        for pdx in range(num_patches):
-                            patch_activation = var_activation[:, :, pdx]
-                            fourier_coeffs_d2 = torch.einsum('vud,fv,Fu->fFd', patch_activation, fourier_basis_d1, fourier_basis_d1)
-                            fourier_coeffs_d2 = fourier_coeffs_d2.reshape((1+2*num_freqs)**2, hidden_dim)
-                            fve_activations[pdx][store_idx] = fourier_coeffs_d2
+                if args.plot_fve and layer_name in fve_target_layers:
+                    target_var = fve_target_layers[layer_name]['target_var']
+                    vdx = variables.index(target_var)
+                    store_idx = fve_target_layers[layer_name]['store_idx']
+                    if fve_bar_chart_titles[store_idx] is None:
+                        fve_bar_chart_titles[store_idx] = fve_target_layers[layer_name]['bar_chart_title']
+                                    
+                    hidden_dim = curr_activation.shape[2]
+                    # batch_norm_activation = torch.clone(curr_activation)
+                    batch_norm_activation = torch.clone(curr_activation).reshape(ds_all.batch_repeat, args.p, args.p, num_patches * num_variables, -1)
+                    batch_norm_activation = torch.mean(batch_norm_activation, dim=0)    # (P, P, num_patches * num_tokens, D)
+                    var_activation = batch_norm_activation[:, :, patch_indices_by_variable[vdx]] # (P, P, num_patches, D)
+                    
+                    for pdx in range(num_patches):
+                        patch_activation = var_activation[:, :, pdx]
+                        fourier_coeffs_d2 = torch.einsum('vud,fv,Fu->fFd', patch_activation, fourier_basis_d1, fourier_basis_d1)
+                        fourier_coeffs_d2 = fourier_coeffs_d2.reshape((1+2*num_freqs)**2, hidden_dim)
+                        fve_activations[pdx][store_idx] = fourier_coeffs_d2
                             
                 if args.plot_pca:                
                     for vdx, variable in enumerate(variables):             
                         var_activation = torch.clone(curr_activation)                    
                         curr_var_patch_indices = patch_indices_by_variable[vdx]
-                        print(f"\t[var {variable}] patch indices : {curr_var_patch_indices}")
+                        # print(f"\t[var {variable}] patch indices : {curr_var_patch_indices}")
                         
                         # Reshape Attention Score layers to start with (B, num_variables*num_patches, ...)
                         c_var_patch_indices = patch_indices_by_variable[0]
@@ -283,7 +281,7 @@ if __name__ == '__main__':
                         args.p, x_src, x_tgt, correct_mask, low_confidence_mask, 
                         fve_activations[pdx][0], fve_activations[pdx][1],
                         num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs,
-                        fve_img_path, title=title, 
+                        fve_img_path, title=title, sub_bar1_title=fve_bar_chart_titles[0], sub_bar2_title=fve_bar_chart_titles[1]
                     )
             
             # Plot PCA                

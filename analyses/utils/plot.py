@@ -887,7 +887,7 @@ def plot_fve_barchart_and_heatmap(
     p, x_src, x_tgt, correct_mask, low_confidence_mask, 
     act1_fourier_d2, act2_fourier_d2, 
     num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs,
-    save_dir, title=None, 
+    save_dir, title=None, sub_bar1_title=None, sub_bar2_title=None,
 ):
     fig = plt.figure(figsize=(24, 12))
     outer_gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1, 1.5], wspace=0.02)
@@ -938,7 +938,7 @@ def plot_fve_barchart_and_heatmap(
     render_bar_graph_two_degree_neuron_level_on_ax(
         ax_v_bar, act1_fourier_d2, num_freqs, 
         num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
-        title=f"Token 'a' Attention V Layer FVE values"
+        title=sub_bar1_title,
     )
     
     render_heatmap_neuron_level_on_ax(
@@ -954,7 +954,7 @@ def plot_fve_barchart_and_heatmap(
     render_bar_graph_two_degree_neuron_level_on_ax(
         ax_ff_bar, act2_fourier_d2, num_freqs, 
         num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
-        title=f"Token 'c' FFN pre-GeLU Layer FVE values"
+        title=sub_bar2_title,
     )
     
     render_heatmap_neuron_level_on_ax(
@@ -991,3 +991,244 @@ def generate_gif_animation(root_dir, file_name):
             loop=0         # repeat
         )
         print(f"✅ GIF Created: {gif_path}")
+
+
+
+import argparse
+import os
+import gc
+from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
+import io
+from PIL import Image
+import time
+from copy import deepcopy
+import h5py
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torchvision.utils import save_image, make_grid
+import torch.multiprocessing as mp
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import matplotlib.ticker as ticker
+
+from utils.manage_project import make_weight_and_result_dir
+
+
+# def draw_pca(patch_activation, ax, labels, plot_centroid=True):
+#     pca = PCA(n_components=2)
+#     reduced = pca.fit_transform(patch_activation.cpu().numpy())
+    
+#     unique_labels = np.unique([l for l in labels if l is not None])
+    
+#     # Scatter plot batch data
+#     scatter_s = 5
+#     ax.scatter(reduced[:, 0], reduced[:, 1], c=labels_np, cmap='hsv', s=scatter_s, alpha=0.6)
+    
+#     if plot_centroid:
+#         # Spot Centroids of each label
+#         norm = plt.Normalize(vmin=unique_labels.min(), vmax=unique_labels.max())
+#         cmap = plt.get_cmap('hsv')
+#         centroid_scale = 4
+        
+#         for u_label in unique_labels:
+#             mask = (labels_np == u_label)
+#             if not np.any(mask): continue
+            
+#             centroid = reduced[mask].mean(axis=0)   # Mean of batches (multiple images)
+#             ax.scatter(centroid[0], centroid[1],
+#                     color=cmap(norm(u_label)),
+#                     s=scatter_s*pow(centroid_scale,2), marker='o',
+#                     edgecolors='black', linewidths=1.0,
+#                     alpha=1.0, zorder=5)
+    
+#     ax.set_xticks([]); ax.set_yticks([])
+#     ax.set_title(f"PCA on Activations", fontsize=12)
+
+
+def draw_entropy_accuracy_graph(
+    timesteps, 
+    opt_entropies_list, entropy_type,
+    accuracies_list, ode_fail_tdx, ode_fail_val, save_path
+):
+    print(f"Draw entropy_accuracy_graph. Entropy Type : {entropy_type}")
+    # Color Gradation by ODE Final Accuracy
+    cmap_name = "traffic_sign_grad"
+    high_accuracy = "#00FF00"
+    low_accuracy = "#FF0000"
+    custom_cmap = mcolors.LinearSegmentedColormap.from_list(cmap_name, [low_accuracy, high_accuracy], N=100)
+    color_gradation = custom_cmap(accuracies_list)
+        
+    entropy_ylabel = ""
+    if entropy_type in ("FVE Entropy", "Neumann Entropy"):
+        entropy_ylabel = 'Entropy (nats)'
+    elif entropy_type == "Stable Rank":
+        entropy_ylabel = 'Rank'
+                
+    # (Needs Improvement) Average out patches for now
+    opt_entropies_list = np.average(opt_entropies_list, axis=1)
+    
+    entropy_data_list = []
+    entropy_data_list.append(
+        # [marker, data_list, pred_tdx, data_label, y_axis_label, y_min, y_max]
+        ["o", opt_entropies_list, -1, f"{entropy_type} Raw", entropy_ylabel, min(opt_entropies_list), max(opt_entropies_list)]
+    )
+        
+    # 1st-Derivative Data
+    d_opt_entropies = np.diff(opt_entropies_list)
+    d_opt_entropies_list = d_opt_entropies.tolist()
+    # (Needs Improvement) Currently argmax -> Later modify to the first peak!
+    d_pred_tdx = int(np.nanargmax(d_opt_entropies_list))    
+    d_min, d_max = min(d_opt_entropies_list), max(d_opt_entropies_list)
+    # Pad Nones for empty timesteps (1st derivative!)
+    d_opt_entropies_list.insert(0, None)
+    d_pred_tdx += 1
+    # entropy_data_list.append(["P", d_opt_entropies_list, d_pred_tdx, f"{entropy_type} 1st Derivative", "", d_min, d_max])
+    
+    # 2nd-Derivative Data
+    dd_opt_entropies = np.diff(d_opt_entropies)
+    dd_opt_entropies_list = dd_opt_entropies.tolist()
+    # (Needs Improvement) Currently argmax -> Later modify to the first peak!
+    dd_pred_tdx = int(np.nanargmax(dd_opt_entropies_list))    
+    dd_min, dd_max = min(dd_opt_entropies_list), max(dd_opt_entropies_list)
+    # Pad Nones for empty timesteps (2nd derivative!)
+    dd_opt_entropies_list.insert(0, None)
+    dd_pred_tdx += 1
+    dd_opt_entropies_list.append(None)
+    print(f"2nd_deriv_tdx : {dd_pred_tdx}", end=" ")
+    entropy_data_list.append(["*", dd_opt_entropies_list, dd_pred_tdx, f"{entropy_type} 2nd Derivative", "", dd_min, dd_max])
+    
+    fig, ax = plt.subplots(figsize=(12, 7))      
+    ax.set_zorder(len(entropy_data_list)+1)
+    ax.patch.set_visible(False)  
+    # print(f"ODE_fail_tdx : {ode_fail_tdx}")
+    _draw_accuracy_graph(ax, timesteps, color_gradation, accuracies_list, ode_fail_tdx, ode_fail_val)
+    
+    axes_list = []
+    for i, (marker, data_list, pred_tdx, data_label, y_axis_label, y_min, y_max) in enumerate(reversed(entropy_data_list)):
+        curr_axis = ax.twinx()
+        curr_axis.set_zorder(i)
+        axes_list.append(curr_axis)
+        _draw_entropy_graph(ax, curr_axis, timesteps, color_gradation, marker, data_list, pred_tdx, data_label, y_axis_label, y_min, y_max)
+        # curr_axis.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.1e'))
+        # curr_axis.spines['right'].set_position(('axes', 1.0 + 0.08*i))
+    
+    ax.set_xlim(timesteps[0]-0.1, timesteps[-1]+0.1)
+    ax.set_ylim(-0.05, 1.05)
+    axes_list.append(ax)
+
+    # 4. 스타일링 및 축 설정
+    num_xticks = 6
+    # 리스트로 변환하여 조작 가능하게 만듦
+    display_timesteps = np.linspace(0, len(timesteps) - 1, num_xticks, dtype=int).tolist()
+    ax.set_xticks(display_timesteps)
+    
+    # 3. 동적 라벨 생성 (insert 대신 조건문 사용)
+    xtick_labels = [] 
+    for tick in display_timesteps:
+        noise_pct = int((fixed_total_sample_step - tick) / fixed_total_sample_step * 100)
+        xtick_labels.append(f"{tick+1}/50\n({noise_pct}%)")
+    
+    # 양 끝단 부가 설명 추가
+    xtick_labels[0] += "\nPure Noise"
+    xtick_labels[-1] += "\nIncorrect Image"
+    
+    # 4. 축 적용
+    ax.set_xticklabels(xtick_labels, fontsize=13)
+    
+    ax.set_ylabel('Correction Accuracy', fontsize=16, color="black")
+    ax.set_ylim(-0.05, 1.05)
+    # ax2.set_ylim(1.5, 2.5)
+    ax.tick_params(axis='y', labelsize=13)
+    ax.grid(True, linestyle=':', alpha=0.6)
+    
+    lines_list, labels_list = [], []
+    for curr_axis in reversed(axes_list):
+        curr_lines, curr_labels = curr_axis.get_legend_handles_labels()
+        lines_list.extend(curr_lines)
+        labels_list.extend(curr_labels)
+    ax.legend(lines_list, labels_list, 
+            bbox_to_anchor=(1.0, 0.9),
+            loc='upper right', fontsize=10
+        )
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=80)
+    plt.close(fig)   
+
+
+def _draw_accuracy_graph(
+    ax, timesteps, color,
+    accuracies_list, ode_fail_tdx, ode_fail_val, 
+):    
+    # ax.set_zorder(ax2.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    
+    # ODE Final Accuracy
+    ax.plot(timesteps, accuracies_list, color="black", linestyle='-', alpha=0.3, 
+            linewidth=1.0, zorder=1)
+    ax.scatter(timesteps, accuracies_list, color=color, s=60, 
+                alpha=1.0, zorder=5, edgecolors="black", marker='^', label="ODE Final Accuracy")
+        
+    # ODE Failure timestep
+    if ode_fail_tdx != -1:
+        ax.axvline(x=ode_fail_tdx, color='red', linestyle='--', linewidth=1.5, alpha=0.8, zorder=0)
+        annotate_label = f"ODE Final Accuracy\n{ode_fail_val*100:.1f}% " 
+        ax.annotate(
+            annotate_label,
+            xy=(ode_fail_tdx, ax.get_ylim()[1]),
+            xytext=(5, 0),
+            textcoords="offset points",
+            ha='left', va='top',                    
+            color='red', fontsize=10, 
+        )
+
+    # Find complete failure tdx (i.e. accuracy = 0.0)
+    complete_fail_tdx = 0
+    for accy in accuracies_list:
+        if accy == 0.0:
+            break
+        complete_fail_tdx += 1
+    
+    print(f"complete_fail_tdx : {complete_fail_tdx}")
+    ax.axvline(x=complete_fail_tdx, color='red', linestyle='--', linewidth=1.5, alpha=0.8, zorder=0)
+    annotate_label_complete = f"\n0.0%" 
+    ax.annotate(
+        annotate_label_complete,
+        xy=(complete_fail_tdx, ax.get_ylim()[1]),
+        xytext=(-5, 0),
+        textcoords="offset points",
+        ha='right', va='top',                    
+        color='red', fontsize=10, 
+    )
+    
+    if ode_fail_tdx != -1:
+        ax.axvspan(complete_fail_tdx, ode_fail_tdx, color='red', alpha=0.15, zorder=0)
+
+
+def _draw_entropy_graph(
+    ax1, ax2, timesteps, color, marker,
+    input_entropies_list, dd_pred_tdx, entropy_label, y_axis_label, y_min, y_max
+):
+    # Entropy 
+    ax2.plot(timesteps, input_entropies_list, color="black", 
+            linestyle='-', linewidth=1.0, alpha=0.5, zorder=2)
+    ax2.scatter(timesteps, input_entropies_list, color=color, s=40, alpha=0.8, marker=marker,
+                zorder=3, edgecolors="black", label=entropy_label)
+    
+    # Prediction timestep
+    ax1.axvline(x=dd_pred_tdx, color='blue', linestyle=':', linewidth=2.0, alpha=1.0, zorder=10)
+    ax1.annotate(
+        # f"Prediction {entropy_label}",
+        f"Pred",
+        xy=(dd_pred_tdx, ax1.get_ylim()[1]),
+        xytext=(5, 1),  
+        textcoords="offset points",
+        ha='left', va='bottom',                    
+        color='blue', fontsize=10
+    )
