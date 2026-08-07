@@ -902,6 +902,8 @@ def plot_fve_barchart_and_heatmap(
     vis_correct_mask = correct_mask[:num_vis]
     vis_low_confidence_mask = low_confidence_mask[:num_vis]
     rgb_image = vis_image.repeat(1, 3, 1, 1) # (B, 3, 32, 96)
+    # rgb_image = (rgb_image - rgb_image.min()) / (rgb_image.max() - rgb_image.min())
+    rgb_image = torch.clamp(rgb_image, 0.0, 1.0)
     img_device = rgb_image.device
     for i in range(len(vis_correct_mask)):
         if vis_low_confidence_mask[i]:
