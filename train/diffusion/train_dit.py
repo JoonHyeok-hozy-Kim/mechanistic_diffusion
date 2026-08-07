@@ -224,6 +224,7 @@ if __name__ == '__main__':
                     'max_valid_accuracy' : curr_max_valid_accuracy,
                 }
                 f.write(f"epoch_{epoch}-valid_accy_{valid_accuracy:.2f}\n")
+                f.flush()
                 torch.save(checkpoint, os.path.join(weight_dir, f"model_best.pth"))        
                 
             # Save image when [train, valid]-accuracy increase by 5%p or in save_weight_freq
