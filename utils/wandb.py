@@ -2,23 +2,23 @@ import os
 import glob
 
 
-def get_best_checkpoint(weight_dir):
+def get_best_checkpoint(weight_dir, choose_final=False):
     assert os.path.exists(weight_dir), f"Invalid path : {weight_dir}"
-    
-    best_format = weight_dir + "/model_best.pth"
-    model_best_file = glob.glob(best_format)
-    if model_best_file:
-        return model_best_file[0]
+    if choose_final:
+        final_format = weight_dir + "/model_final.pth"
+        model_final_file = glob.glob(final_format)
+        if model_final_file:
+            return model_final_file[0]
+        else:
+            print(f"Final model not found at {weight_dir}")
     else:
-        print(f"Best model not found at {weight_dir}")
-    
-    final_format = weight_dir + "/model_final.pth"
-    model_final_file = glob.glob(final_format)
-    if model_final_file:
-        return model_final_file[0]
-    else:
-        print(f"Final model not found at {weight_dir}")
-    
+        best_format = weight_dir + "/model_best.pth"
+        model_best_file = glob.glob(best_format)
+        if model_best_file:
+            return model_best_file[0]
+        else:
+            print(f"Best model not found at {weight_dir}")
+        
     raise FileNotFoundError(f"No feasible weight found at : {weight_dir}")
 
 

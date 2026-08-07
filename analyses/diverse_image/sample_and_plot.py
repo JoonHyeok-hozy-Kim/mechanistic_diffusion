@@ -212,8 +212,8 @@ if __name__ == '__main__':
                     continue                
                     
                 if args.plot_fve and \
-                    layer_name == 'layers.0.attention.hook_v' or layer_name == 'layers.0.feed_forward_out.hook_pre_activation':
-                        if layer_name == 'layers.0.attention.hook_v':
+                    layer_name == 'layers.0.attention.hook_k' or layer_name == 'layers.0.feed_forward_out.hook_pre_activation':
+                        if layer_name == 'layers.0.attention.hook_k':
                             target_var = 'a'
                             vdx = variables.index(target_var)
                             store_idx = 0
@@ -223,14 +223,14 @@ if __name__ == '__main__':
                             store_idx = 1
                                         
                         hidden_dim = curr_activation.shape[2]
-                        batch_norm_activation = torch.clone(curr_activation)
-                        # batch_norm_activation = torch.clone(curr_activation).reshape(ds_all.batch_repeat, args.p, args.p, num_patches * num_variables, -1)
+                        # batch_norm_activation = torch.clone(curr_activation)
+                        batch_norm_activation = torch.clone(curr_activation).reshape(ds_all.batch_repeat, args.p, args.p, num_patches * num_variables, -1)
                         batch_norm_activation = torch.mean(batch_norm_activation, dim=0)    # (P, P, num_patches * num_tokens, D)
                         var_activation = batch_norm_activation[:, :, patch_indices_by_variable[vdx]] # (P, P, num_patches, D)
                         
                         for pdx in range(num_patches):
                             patch_activation = var_activation[:, :, pdx]
-                            fourier_coeffs_d2 = torch.einsum('vud,fv,Fu->fFd', batch_norm_activation, fourier_basis_d1, fourier_basis_d1)
+                            fourier_coeffs_d2 = torch.einsum('vud,fv,Fu->fFd', patch_activation, fourier_basis_d1, fourier_basis_d1)
                             fourier_coeffs_d2 = fourier_coeffs_d2.reshape((1+2*num_freqs)**2, hidden_dim)
                             fve_activations[pdx][store_idx] = fourier_coeffs_d2
                             

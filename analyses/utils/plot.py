@@ -898,13 +898,15 @@ def plot_fve_barchart_and_heatmap(
     n_rows = p + 10
     num_vis = n_rows * n_cols 
     
-    all_image = torch.cat([x_src[:num_vis], x_tgt[:num_vis]], dim=3)
-    rgb_image = all_image.repeat(1, 3, 1, 1) # (B, 3, 32, 96)
+    vis_image = torch.cat([x_src[:num_vis], x_tgt[:num_vis]], dim=3)
+    vis_correct_mask = correct_mask[:num_vis]
+    vis_low_confidence_mask = low_confidence_mask[:num_vis]
+    rgb_image = vis_image.repeat(1, 3, 1, 1) # (B, 3, 32, 96)
     img_device = rgb_image.device
-    for i in range(len(correct_mask)):
-        if low_confidence_mask[i]:
+    for i in range(len(vis_correct_mask)):
+        if vis_low_confidence_mask[i]:
             color = torch.tensor([1.0, 1.0, 0.0], device=img_device) # Yellow
-        elif correct_mask[i]:
+        elif vis_correct_mask[i]:
             color = torch.tensor([0.0, 1.0, 0.0], device=img_device) # Green
         else:
             color = torch.tensor([1.0, 0.0, 0.0], device=img_device) # Red

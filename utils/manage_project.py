@@ -40,6 +40,8 @@ def make_weight_and_result_dir(
     else:
         if resume_wandb_url and resume_wandb_url.lower() != "false":
             user_name, project_name, run_id = get_wandb_run_info(resume_wandb_url)
+            print(f"user_name, project_name, run_id : {user_name}, {project_name}, {run_id}")
+            
             wandb.init(
                 project=project_name,
                 entity=user_name, 
@@ -47,7 +49,6 @@ def make_weight_and_result_dir(
                 resume="must",
             )
             
-            print(f"user_name, project_name, run_id : {user_name}, {project_name}, {run_id}")
             base_weight_dir = find_project_run_dirctory(in_weight_dir, run_id, 2)
             base_result_dir = find_project_run_dirctory(in_result_dir, run_id, 2)
             print(f"found base_weight_dir : {base_weight_dir}")
@@ -132,9 +133,9 @@ def get_config_str_dict(args):
 
                 
                 
-def get_checkpoint_start_epoch_and_resume(prev_weights_dir, optimizer, model):
+def get_checkpoint_start_epoch_and_resume(prev_weights_dir, optimizer, model, choose_final=False):
     print(f"=> Getting checkpoints from: {prev_weights_dir}")
-    last_checkpoint = get_best_checkpoint(prev_weights_dir)
+    last_checkpoint = get_best_checkpoint(prev_weights_dir, choose_final)
     checkpoint = torch.load(last_checkpoint, weights_only=False)
     start_epoch = checkpoint['epoch'] + 1
     

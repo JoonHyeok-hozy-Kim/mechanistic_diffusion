@@ -105,7 +105,7 @@ if __name__ == '__main__':
         
     # Resume from the previous run.
     if prev_weight_dir is not None:
-        start_epoch = get_checkpoint_start_epoch_and_resume(prev_weight_dir, optimizer, model)
+        start_epoch = get_checkpoint_start_epoch_and_resume(prev_weight_dir, optimizer, model, choose_final=True)
     else:
         start_epoch = 0
     
@@ -133,6 +133,11 @@ if __name__ == '__main__':
     curr_max_train_accuracy = -1
     curr_max_valid_accuracy = -1        
     tol = 0
+    
+    # Save model_best_records
+    model_best_record = []
+    model_best_record_file_path = os.path.join(weight_dir, f"model_best_record.txt")
+    f = open(model_best_record_file_path, "w", encoding="utf-8")
     for epoch in tqdm(range(start_epoch, start_epoch + args.epochs)):        
         # Learning Rate Schedule setting
         # curr_lr = get_lr_schedule(epoch, start_epoch + num_epochs, scaled_lr, warm_up=True)
@@ -166,7 +171,9 @@ if __name__ == '__main__':
                 'max_train_accuracy' : curr_max_train_accuracy,
                 'max_valid_accuracy' : curr_max_valid_accuracy,
             }
-            torch.save(checkpoint, os.path.join(weight_dir, f"checkpoint_epoch_{epoch}.pth"))
+            
+            # # Disabled due to memory issue
+            # torch.save(checkpoint, os.path.join(weight_dir, f"checkpoint_epoch_{epoch}.pth"))
         
         # Evaluate performance
         if epoch % args.sample_freq != 0:
@@ -216,6 +223,7 @@ if __name__ == '__main__':
                     'max_train_accuracy' : curr_max_train_accuracy,
                     'max_valid_accuracy' : curr_max_valid_accuracy,
                 }
+                f.write(f"epoch_{epoch}-valid_accy_{valid_accuracy:.2f}\n")
                 torch.save(checkpoint, os.path.join(weight_dir, f"model_best.pth"))        
                 
             # Save image when [train, valid]-accuracy increase by 5%p or in save_weight_freq
@@ -248,7 +256,8 @@ if __name__ == '__main__':
                         'max_train_accuracy' : curr_max_train_accuracy,
                         'max_valid_accuracy' : curr_max_valid_accuracy,
                     }
-                    torch.save(checkpoint, os.path.join(weight_dir, f"model_final.pth"))                      
+                    torch.save(checkpoint, os.path.join(weight_dir, f"model_final.pth"))
+                    f.close()
                     
                     if not args.no_wandb_record:
                         wandb.finish()
@@ -267,6 +276,7 @@ if __name__ == '__main__':
         'max_valid_accuracy' : curr_max_valid_accuracy,
     }
     torch.save(checkpoint, os.path.join(weight_dir, f"model_final.pth"))   
+    f.close()
     
     if not args.dry_run:
         wandb.finish()
