@@ -1,12 +1,15 @@
 import os
 
 import torch
+import torchvision.utils as tvu
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.gridspec as gridspec
 import seaborn as sns
 from sklearn.decomposition import PCA
+from PIL import Image
 
 PALLETE = ['#51F0C4', '#F0C651', '#52C6F0', '#688D9B', '#F0A351', '#3E7566'] 
 
@@ -824,7 +827,7 @@ def save_patch_grid_plot_single_variable(grid_size, variable_data, num_freqs, ou
     plt.close()
     
 
-def save_full_layers_grid(layer_activations, labels, save_dir, time_step, var_name, title=None, plot_centroid=False):
+def plot_pca_all_layers(layer_activations, labels, save_dir, time_step, var_name, title=None, plot_centroid=False):
     """
     layer_activations: {layer_name: activation_tensor (P^2, D)}
     """
@@ -878,4 +881,109 @@ def save_full_layers_grid(layer_activations, labels, save_dir, time_step, var_na
     
     plt.savefig(save_dir, dpi=80)
     plt.close(fig)
+
+
+def plot_fve_barchart_and_heatmap(
+    p, x_src, x_tgt, correct_mask, low_confidence_mask, 
+    act1_fourier_d2, act2_fourier_d2, 
+    num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs,
+    save_dir, title=None, 
+):
+    fig = plt.figure(figsize=(24, 12))
+    outer_gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1, 1.5], wspace=0.02)
+            
+    # Left Sample Image Grid
+    ax_img = fig.add_subplot(outer_gs[0])
+    n_cols = 8
+    n_rows = p + 10
+    num_vis = n_rows * n_cols 
     
+    all_image = torch.cat([x_src[:num_vis], x_tgt[:num_vis]], dim=3)
+    rgb_image = all_image.repeat(1, 3, 1, 1) # (B, 3, 32, 96)
+    img_device = rgb_image.device
+    for i in range(len(correct_mask)):
+        if low_confidence_mask[i]:
+            color = torch.tensor([1.0, 1.0, 0.0], device=img_device) # Yellow
+        elif correct_mask[i]:
+            color = torch.tensor([0.0, 1.0, 0.0], device=img_device) # Green
+        else:
+            color = torch.tensor([1.0, 0.0, 0.0], device=img_device) # Red
+        
+        c_view = color.view(3, 1, 1)
+        rgb_image[i, :, :2, 64:] = c_view   # Top
+        rgb_image[i, :, -2:, 64:] = c_view  # Bottom
+        rgb_image[i, :, :, -2:] = c_view    # Right
+        rgb_image[i, :, :, 64:66] = c_view  # Left
+    
+    combined_grid = tvu.make_grid(rgb_image, nrow=n_cols, padding=0, normalize=False)
+    combined_grid_np = combined_grid.permute(1, 2, 0).cpu().numpy()
+    combined_grid_np = (combined_grid_np + 1.0) / 2.0  # -1->0, 1->1 로 매핑
+    combined_grid_np = np.clip(combined_grid_np, 0, 1) # 안전하게 다시 한번 클리핑
+    
+    ax_img.imshow(combined_grid.permute(1, 2, 0).cpu().numpy())
+    # ax_img.set_title(f"Generated Samples (T={time_step:02d})") 
+    ax_img.axis('off')
+
+
+    # Right Graphs Grid
+    inner_gs = gridspec.GridSpecFromSubplotSpec(2, 2, subplot_spec=outer_gs[1], wspace=0.1, hspace=0.15)
+    # Top Right
+    ax_v_bar = fig.add_subplot(inner_gs[0, 0])
+    ax_v_hm = fig.add_subplot(inner_gs[0, 1])
+
+    render_bar_graph_two_degree_neuron_level_on_ax(
+        ax_v_bar, act1_fourier_d2, num_freqs, 
+        num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
+        title=f"Token 'a' Attention V Layer FVE values"
+    )
+    
+    render_heatmap_neuron_level_on_ax(
+        ax_v_hm, act1_fourier_d2, num_freqs, 
+        num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
+        title=f"2-Degree Heatmap"
+    )    
+    
+    # Bottom Right
+    ax_ff_bar = fig.add_subplot(inner_gs[1, 0])
+    ax_ff_hm = fig.add_subplot(inner_gs[1, 1])
+
+    render_bar_graph_two_degree_neuron_level_on_ax(
+        ax_ff_bar, act2_fourier_d2, num_freqs, 
+        num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
+        title=f"Token 'c' FFN pre-GeLU Layer FVE values"
+    )
+    
+    render_heatmap_neuron_level_on_ax(
+        ax_ff_hm, act2_fourier_d2, num_freqs, 
+        num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
+        title=f"2-Degree Heatmap"
+    )
+    
+    if title is None:
+        fig.suptitle(f"Inference and FVEs", fontsize=20)
+    else:
+        fig.suptitle(title)
+    
+    plt.savefig(save_dir, dpi=80)
+    plt.close(fig)
+
+
+
+def generate_gif_animation(root_dir, file_name):
+    png_files = sorted([f for f in os.listdir(root_dir) if f.endswith('.png')])
+    if len(png_files) > 1:
+        frames = []
+        for filename in png_files:
+            img_path = os.path.join(root_dir, filename)
+            img = Image.open(img_path)
+            frames.append(img)
+            
+        gif_path = os.path.join(root_dir, file_name)
+        frames[0].save(
+            gif_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=200,  # 200ms per frame (5 FPS)
+            loop=0         # repeat
+        )
+        print(f"✅ GIF Created: {gif_path}")

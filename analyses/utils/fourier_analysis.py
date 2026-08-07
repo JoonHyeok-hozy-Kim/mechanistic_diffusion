@@ -72,11 +72,11 @@ def explain_trigonometric_basis(fourier_basis, fourier_basis_names, p):
             print(f"{desc}  vs {B[idx]}")
 
 
-def get_indices_all_frequencies(p):
+def get_indices_all_frequencies(p, latex=False):
     indices, descs = [], []
     for k in range(1, p//2+1):
         k_indices, k_descs = [], []
-        for idx, desc in get_d2_indices_by_frequency(p, k):
+        for idx, desc in get_d2_indices_by_frequency(p, k, latex=latex):
             k_indices.append(idx)
             k_descs.append(desc.replace("k", str(k)))
         indices.append(k_indices)

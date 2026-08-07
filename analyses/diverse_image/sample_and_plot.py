@@ -18,7 +18,7 @@ from data.modular_addition import Inference_All_Image_Modular_Arithmetic_Dataset
 from classifier_models.manage_classifiers import get_classifier
 from analyses.utils.fourier_analysis import get_fourier_basis_and_names, get_indices_all_frequencies, \
     get_d2_indices_by_frequency
-from analyses.utils.plot import save_full_layers_grid
+from analyses.utils.plot import plot_pca_all_layers, plot_fve_barchart_and_heatmap, generate_gif_animation
 
 RANDOM_SEED = 46
 
@@ -56,6 +56,8 @@ if __name__ == '__main__':
         parser.add_argument("--correct_result_img", action="store_true", help="Correct result image at position c")
         parser.add_argument("--latex_formatted_out", action="store_true", help="Latex formatted output")
         parser.add_argument("--ffn_out_pre_act_only", action="store_true", help="Target only the FFN out Pre-activation layer.")
+        parser.add_argument("--plot_fve", action="store_true", help="Plot predictions and FVE barcharts.")
+        parser.add_argument("--plot_pca", action="store_true", help="Plot PCA on every layer activations.")
         return parser.parse_args()
     args = parse_args()    
     
@@ -133,32 +135,47 @@ if __name__ == '__main__':
     variables = ['c', 'a', 'b']
     num_variables = len(variables)
     
-    # Label for scatter plot
-    lables_by_variable = [
-        [(p_a + p_b)%args.p for p_a in range(args.p) for p_b in range(args.p)], # Label in 'c' order
-        [p_a for p_a in range(args.p) for p_b in range(args.p)],    # Label in 'a' order
-        [p_b for p_a in range(args.p) for p_b in range(args.p)],    # Label in 'b' order
-    ]
-    
     # Patch related parameters
     input_size = model.input_size
     patch_size = model.patch_size
     grid_size = input_size // patch_size
     num_patches = grid_size ** 2
+    patch_indices_by_variable = []
+    for i in range(num_variables):
+        indices = []
+        for j in range(grid_size):
+            var1 = i * grid_size + j * num_variables * grid_size
+            for k in range(grid_size):
+                var2 = var1 + k
+                indices.append(var2)
+        patch_indices_by_variable.append(indices)
             
     # Load Data : Ordered by (P_a, P_b) N^2 pairs in one batch
     dl_all_iter = iter(dl_all)
-    answer_img, x_src, label_tgt, _, _ = next(dl_all_iter)
+    answer_img, x_src, label_tgt, label_a, label_b = next(dl_all_iter)
     
     # Sample from the operands dataset.
     x_src = x_src.to(device)
     answer_img = answer_img.to(device)
     x_tgt = torch.randn_like(answer_img, device=device)
     
+    # Fourier Analysis settings
+    fourier_basis_d1, fourier_basis_names = get_fourier_basis_and_names(args.p, latex=args.latex_formatted_out)
+    num_freqs = (args.p - 1) // 2
+    num_2d_bases = num_variables**2 - 1    
+    # Get idices of 1-degree bases and 2-degree bases with same frequences
+    two_degree_idxes, two_degree_idxes_descs = get_indices_all_frequencies(args.p, latex=args.latex_formatted_out)  # (num_ks, num_2d_bases)  e.g. (11, 8) 
+    indices_flattened = two_degree_idxes.flatten()  
+    desc_flattened = two_degree_idxes_descs.flatten()    
+    
     B = answer_img.size(0)
     dt = 1.0 / args.sample_steps
     dt = torch.tensor([dt] * B).to(device).view([B, *([1] * len(answer_img.shape[1:]))])
     time_step_cnt = 0
+    
+    # Save dirs
+    fve_dir = os.path.join(result_dir, "plot_fve")
+    pca_dir = os.path.join(result_dir, "plot_pc")
     
     with torch.no_grad():
         for i in range(args.sample_steps, 0, -1):
@@ -169,101 +186,138 @@ if __name__ == '__main__':
                 t_scalar = min(t_scalar, 0.99)
             t_tensor = torch.tensor([t_scalar] * B).to(x_tgt.device)
             
+            # Sample
             vc = model(x_tgt, t_tensor, x_src)
             x_tgt = x_tgt - dt * vc     # Instantiate new x_tgt everytime.
             
-            curr_cache = {}
-            for layer_name, activation in cache.items():
-                if not isinstance(activation, torch.Tensor):
-                    continue
-                mean_activation = activation.detach().clone()
-                prev_shape = mean_activation.shape
-                mean_activation = mean_activation.reshape(ds_all.batch_repeat, (args.p)**2, *prev_shape[1:])
-                mean_activation = torch.mean(mean_activation, dim=0)
-                # print(f"{layer_name} : {mean_activation.shape}")
-                curr_cache[layer_name] = mean_activation
+            # Make predictions
+            if args.plot_fve:            
+                # Classification
+                logits = classifier(x_tgt.detach()) 
+                probs = torch.softmax(logits, dim=1)
+                confidences, preds_tensor = torch.max(probs, dim=1)
+                confidences = confidences.cpu().numpy()
+                preds = preds_tensor.cpu().numpy()            
+                accuracy = (preds == label_tgt).float().mean().item()
+                correct_mask = (preds == label_tgt)   
+                threshold = 0.8  
+                low_confidence_mask = (confidences < threshold) # Confidence >= threshold masking
+            
+            # Record activations
+            fve_activations = [[None, None] for _ in range(num_patches)]
+            pca_activations = defaultdict(lambda: defaultdict(dict))
+            
+            for layer_name, curr_activation in cache.items():
+                if not isinstance(curr_activation, torch.Tensor):
+                    continue                
                     
-            # Time-wise Activations : variable - patch - layer
-            curr_time_activations = defaultdict(lambda: defaultdict(dict))
-            layer_cnt = 0
-            for layer_name, activation in curr_cache.items():
-                if not isinstance(activation, torch.Tensor):
-                    continue
-                print(f"{layer_cnt:2d}  {layer_name} : {activation.shape}")
-                
-                patch_indices_by_variable = []
-                for i in range(num_variables):
-                    indices = []
-                    for j in range(grid_size):
-                        var1 = i * grid_size + j * num_variables * grid_size
-                        for k in range(grid_size):
-                            var2 = var1 + k
-                            indices.append(var2)
-                    patch_indices_by_variable.append(indices)
-                
-                
-                for vdx, variable in enumerate(variables):                    
-                    var_activation = torch.clone(activation)                    
-                    curr_var_patch_indices = patch_indices_by_variable[vdx]
-                    print(f"\t[var {variable}] patch indices : {curr_var_patch_indices}")
-                    
-                    # Reshape Attention Score layers to start with (B, num_variables*num_patches, ...)
-                    c_var_patch_indices = patch_indices_by_variable[0]
-                    num_heads = model.layers[0].attention.n_heads
-                    head_dim = model.layers[0].attention.head_dim
-                    if 'hook_A_raw' in layer_name or 'hook_A_softmax' in layer_name:
-                        if variable == 'c':    # No Attention Score for the variable c
-                            continue
-                        
-                        # Original Shape : (P_u*P_v, num_heads, num_variables*num_patches, num_variables*num_patches)
-                        var_activation = var_activation.reshape(
-                            args.p**2, num_variables*num_patches, num_variables*num_patches, num_heads
-                        )
-                        # Slice query(c) patches
-                        var_activation = var_activation[:, :, c_var_patch_indices, :]     # (P_u*P_v, num_variables*num_patches, c_patches, num_heads)
-                    
-                    elif 'hook_Av' in layer_name:
-                        if variable == 'c':    # No Attention Score for the variable c
-                            continue
-                        
-                        # Original Shape : (P_u*P_v, num_heads, num_variables*num_patches, head_dim)
-                        var_activation = var_activation.reshape(
-                            args.p**2, num_variables*num_patches, num_heads, head_dim
-                        )
-                    
-                    var_activation = var_activation[:, curr_var_patch_indices]            # (P_u*P_v, u_patches, ...)
-                    var_activation = var_activation.reshape(args.p**2, num_patches, -1)     # (P_u*P_v, u_patches, D)
-                    print(f"\t\t[var_activation : {var_activation.shape}")                
-                    
-                    for pdx in range(num_patches):
-                        patch_activation = var_activation[:, pdx]
-                        
-                        variable_dir = os.path.join(result_dir, f"variable_{variable}")
-                        patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
-                        if time_step_cnt == 0:
-                            os.makedirs(patch_dir, exist_ok=True)             
+                if args.plot_fve and \
+                    layer_name == 'layers.0.attention.hook_v' or layer_name == 'layers.0.feed_forward_out.hook_pre_activation':
+                        if layer_name == 'layers.0.attention.hook_v':
+                            target_var = 'a'
+                            vdx = variables.index(target_var)
+                            store_idx = 0
                         else:
-                            assert os.path.exists(patch_dir), f"Dir does not exist : {patch_dir}"
+                            target_var = 'c'
+                            vdx = variables.index(target_var)
+                            store_idx = 1
+                                        
+                        hidden_dim = curr_activation.shape[2]
+                        batch_norm_activation = torch.clone(curr_activation)
+                        # batch_norm_activation = torch.clone(curr_activation).reshape(ds_all.batch_repeat, args.p, args.p, num_patches * num_variables, -1)
+                        batch_norm_activation = torch.mean(batch_norm_activation, dim=0)    # (P, P, num_patches * num_tokens, D)
+                        var_activation = batch_norm_activation[:, :, patch_indices_by_variable[vdx]] # (P, P, num_patches, D)
                         
-                        curr_time_activations[variable][pdx][layer_name] = patch_activation                    
-                
-                layer_cnt += 1
+                        for pdx in range(num_patches):
+                            patch_activation = var_activation[:, :, pdx]
+                            fourier_coeffs_d2 = torch.einsum('vud,fv,Fu->fFd', batch_norm_activation, fourier_basis_d1, fourier_basis_d1)
+                            fourier_coeffs_d2 = fourier_coeffs_d2.reshape((1+2*num_freqs)**2, hidden_dim)
+                            fve_activations[pdx][store_idx] = fourier_coeffs_d2
+                            
+                if args.plot_pca:                
+                    for vdx, variable in enumerate(variables):             
+                        var_activation = torch.clone(curr_activation)                    
+                        curr_var_patch_indices = patch_indices_by_variable[vdx]
+                        print(f"\t[var {variable}] patch indices : {curr_var_patch_indices}")
+                        
+                        # Reshape Attention Score layers to start with (B, num_variables*num_patches, ...)
+                        c_var_patch_indices = patch_indices_by_variable[0]
+                        num_heads = model.layers[0].attention.n_heads
+                        head_dim = model.layers[0].attention.head_dim
+                        if 'hook_A_raw' in layer_name or 'hook_A_softmax' in layer_name:
+                            if variable == 'c':    # No Attention Score for the variable c
+                                continue
+                            
+                            # Original Shape : (P_u*P_v, num_heads, num_variables*num_patches, num_variables*num_patches)
+                            var_activation = var_activation.reshape(
+                                ds_all.batch_repeat * args.p**2, num_variables*num_patches, num_variables*num_patches, num_heads
+                            )
+                            # Slice query(c) patches
+                            var_activation = var_activation[:, :, c_var_patch_indices, :]     # (P_u*P_v, num_variables*num_patches, c_patches, num_heads)
+                        
+                        elif 'hook_Av' in layer_name:
+                            if variable == 'c':    # No Attention Score for the variable c
+                                continue
+                            
+                            # Original Shape : (P_u*P_v, num_heads, num_variables*num_patches, head_dim)
+                            var_activation = var_activation.reshape(
+                                ds_all.batch_repeat * args.p**2, num_variables*num_patches, num_heads, head_dim
+                            )
+                        
+                        var_activation = var_activation[:, curr_var_patch_indices]            # (P_u*P_v, u_patches, ...)
+                        var_activation = var_activation.reshape(ds_all.batch_repeat * args.p**2, num_patches, -1)     # (P_u*P_v, u_patches, D)
+                        # print(f"\t\t[var_activation : {var_activation.shape}")                
+                    
+                        for pdx in range(num_patches):
+                            patch_activation = var_activation[:, pdx]
+                            
+                            variable_dir = os.path.join(result_dir, f"variable_{variable}")
+                            patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
+                            if time_step_cnt == 0:
+                                os.makedirs(patch_dir, exist_ok=True)             
+                            else:
+                                assert os.path.exists(patch_dir), f"Dir does not exist : {patch_dir}"
+                            
+                            pca_activations[variable][pdx][layer_name] = patch_activation                    
+                       
+            # Plot FVE
+            if args.plot_fve:
+                for pdx in range(num_patches):
+                    fve_patch_dir = os.path.join(fve_dir, f"patch_{pdx}")
+                    os.makedirs(fve_patch_dir, exist_ok=True)  
+                    fve_img_path = os.path.join(fve_patch_dir, f"fve_timestep_{time_step_cnt:02d}.png")
+                    title = f"Inference and FVEs (Timestep: {time_step_cnt:02d}, Accy: {accuracy:.2f})"
+                    plot_fve_barchart_and_heatmap(
+                        args.p, x_src, x_tgt, correct_mask, low_confidence_mask, 
+                        fve_activations[pdx][0], fve_activations[pdx][1],
+                        num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs,
+                        fve_img_path, title=title, 
+                    )
             
-            for variable, val_pdx in curr_time_activations.items():         
-                variable_labels = lables_by_variable[variables.index(variable)]
-                variable_dir = os.path.join(result_dir, f"variable_{variable}") 
-                for pdx, val_layer in val_pdx.items():
-                    patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
-                    os.makedirs(patch_dir, exist_ok=True)  
-                    out_path = os.path.join(patch_dir, f"all_layers_timestep_{time_step_cnt:02d}.png")
-                    img_obj = save_full_layers_grid(val_layer, variable_labels, out_path, time_step_cnt, variable)
+            # Plot PCA                
+            if args.plot_pca:             
+                for variable, val_pdx in pca_activations.items():         
+                    if variable == 'c':
+                        variable_labels = label_tgt
+                    elif variable == 'a':
+                        variable_labels = label_a
+                    elif variable == 'b':
+                        variable_labels = label_b
+                    else:
+                        raise ValueError(f"Unexpected variable : {variable}")
+                    
+                    pca_var_dir = os.path.join(pca_dir, f"variable_{variable}") 
+                    for pdx, val_layer in val_pdx.items():
+                        pca_patch_dir = os.path.join(pca_var_dir, f"patch_{pdx}")                                                
+                        os.makedirs(pca_patch_dir, exist_ok=True)  
+                        pca_img_path = os.path.join(pca_patch_dir, f"all_layers_timestep_{time_step_cnt:02d}.png")
+                        plot_pca_all_layers(val_layer, variable_labels, pca_img_path, time_step_cnt, variable, plot_centroid=True)
             
-            curr_cache.clear()
-            del curr_cache
             gc.collect()
             torch.cuda.empty_cache()
             time_step_cnt += 1
-            
+    
+    
     for variable in variables:
         variable_dir = os.path.join(result_dir, f"variable_{variable}")
         if not os.path.exists(variable_dir): continue
@@ -272,20 +326,33 @@ if __name__ == '__main__':
             patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
             if not os.path.exists(patch_dir): continue
             
-            png_files = sorted([f for f in os.listdir(patch_dir) if f.endswith('.png')])
-            if len(png_files) > 1:
-                frames = []
-                for filename in png_files:
-                    img_path = os.path.join(patch_dir, filename)
-                    img = Image.open(img_path)
-                    frames.append(img)
+            if args.plot_fve:
+                fve_dir = os.path.join(patch_dir, "plot_fve")
+                fve_file_name = "00_animation.gif"
+                generate_gif_animation(fve_dir, fve_file_name)
+            
+            if args.plot_pca:
+                pca_dir = os.path.join(patch_dir, "plot_pca")
+                pca_file_name = "00_animation.gif"
+                generate_gif_animation(pca_dir, pca_file_name)
+            
+            
+            
+            
+            # png_files = sorted([f for f in os.listdir(patch_dir) if f.endswith('.png')])
+            # if len(png_files) > 1:
+            #     frames = []
+            #     for filename in png_files:
+            #         img_path = os.path.join(patch_dir, filename)
+            #         img = Image.open(img_path)
+            #         frames.append(img)
                     
-                gif_path = os.path.join(patch_dir, f"00_evolution_variable_{variable}_patch_{pdx}.gif")
-                frames[0].save(
-                    gif_path,
-                    save_all=True,
-                    append_images=frames[1:],
-                    duration=200,  # 200ms per frame (5 FPS)
-                    loop=0         # repeat
-                )
-                print(f"✅ GIF Created: {gif_path}")
+            #     gif_path = os.path.join(patch_dir, f"00_evolution_variable_{variable}_patch_{pdx}.gif")
+            #     frames[0].save(
+            #         gif_path,
+            #         save_all=True,
+            #         append_images=frames[1:],
+            #         duration=200,  # 200ms per frame (5 FPS)
+            #         loop=0         # repeat
+            #     )
+            #     print(f"✅ GIF Created: {gif_path}")
