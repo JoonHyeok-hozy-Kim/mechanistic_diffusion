@@ -175,7 +175,7 @@ if __name__ == '__main__':
     
     # Save dirs
     fve_dir = os.path.join(result_dir, "plot_fve")
-    pca_dir = os.path.join(result_dir, "plot_pc")
+    pca_dir = os.path.join(result_dir, "plot_pca")
     
     with torch.no_grad():
         for i in range(args.sample_steps, 0, -1):
@@ -269,15 +269,7 @@ if __name__ == '__main__':
                         # print(f"\t\t[var_activation : {var_activation.shape}")                
                     
                         for pdx in range(num_patches):
-                            patch_activation = var_activation[:, pdx]
-                            
-                            variable_dir = os.path.join(result_dir, f"variable_{variable}")
-                            patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
-                            if time_step_cnt == 0:
-                                os.makedirs(patch_dir, exist_ok=True)             
-                            else:
-                                assert os.path.exists(patch_dir), f"Dir does not exist : {patch_dir}"
-                            
+                            patch_activation = var_activation[:, pdx]                            
                             pca_activations[variable][pdx][layer_name] = patch_activation                    
                        
             # Plot FVE
@@ -317,42 +309,21 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
             time_step_cnt += 1
     
-    
-    for variable in variables:
-        variable_dir = os.path.join(result_dir, f"variable_{variable}")
-        if not os.path.exists(variable_dir): continue
-        
+    if args.plot_fve:
         for pdx in range(num_patches):
-            patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
+            patch_dir = os.path.join(fve_dir, f"patch_{pdx}")
             if not os.path.exists(patch_dir): continue
+            fve_file_name = "00_animation.gif"
+            generate_gif_animation(patch_dir, fve_file_name)
+
+    if args.plot_pca:
+        for variable in variables:
+            variable_dir = os.path.join(pca_dir, f"variable_{variable}")
+            if not os.path.exists(variable_dir): continue
             
-            if args.plot_fve:
-                fve_dir = os.path.join(patch_dir, "plot_fve")
-                fve_file_name = "00_animation.gif"
-                generate_gif_animation(fve_dir, fve_file_name)
-            
-            if args.plot_pca:
-                pca_dir = os.path.join(patch_dir, "plot_pca")
+            for pdx in range(num_patches):
+                patch_dir = os.path.join(variable_dir, f"patch_{pdx}")
+                if not os.path.exists(patch_dir): continue
+                
                 pca_file_name = "00_animation.gif"
-                generate_gif_animation(pca_dir, pca_file_name)
-            
-            
-            
-            
-            # png_files = sorted([f for f in os.listdir(patch_dir) if f.endswith('.png')])
-            # if len(png_files) > 1:
-            #     frames = []
-            #     for filename in png_files:
-            #         img_path = os.path.join(patch_dir, filename)
-            #         img = Image.open(img_path)
-            #         frames.append(img)
-                    
-            #     gif_path = os.path.join(patch_dir, f"00_evolution_variable_{variable}_patch_{pdx}.gif")
-            #     frames[0].save(
-            #         gif_path,
-            #         save_all=True,
-            #         append_images=frames[1:],
-            #         duration=200,  # 200ms per frame (5 FPS)
-            #         loop=0         # repeat
-            #     )
-            #     print(f"✅ GIF Created: {gif_path}")
+                generate_gif_animation(patch_dir, pca_file_name)
