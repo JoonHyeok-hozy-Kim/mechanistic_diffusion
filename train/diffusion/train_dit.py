@@ -41,7 +41,7 @@ if __name__ == '__main__':
         parser.add_argument("--ffn_type", type=str, default="gelu", choices=["swiglu", "gelu"], help="Choose FFN type : swiglu, gelu")
         parser.add_argument("--use_ffn_sandwich", action="store_true", help="Use prepending ffn to self-attention")
         parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate for optimizer")
-        parser.add_argument("--lr_schedule_type", type=str, default="wsd", choices=["wsd", "ws", "d", "cos"], help="Choose LR scheduler type")
+        parser.add_argument("--lr_schedule_type", type=str, default="wsd", choices=["wsd", "ws", "d", "cos", "s"], help="Choose LR scheduler type")
         parser.add_argument("--weight_decay", type=float, default=10.0, help="Weight decay for optimizer")
         parser.add_argument("--use_layer_norm", action="store_true", help="Apply LayerNorm in Transformer and FinalLayer blocks")
         parser.add_argument("--use_rope_2d", action="store_true", help="Apply rope 2d on Attention layers")
@@ -51,6 +51,7 @@ if __name__ == '__main__':
         parser.add_argument("--sample_freq", type=int, default=1)
         parser.add_argument("--dry_run", action="store_true", help="Do not recored to wandb")
         parser.add_argument("--resume_wandb_url", type=str, default=None, help="URL of the run to resume")
+        parser.add_argument("--prev_lr_schedule_type", type=str, default="ws", help="Prev run lr_schedule_type. Usually either 'ws' or 's'.")
         return parser.parse_args()
     args = parse_args()    
     
@@ -78,6 +79,7 @@ if __name__ == '__main__':
         config_str,
         wandb_exp_name,
         config_dict,
+        args.prev_lr_schedule_type,
     )
     
     # Following GrokkingTransformer hyperparameters: d_model=128, num_heads=4, d_ff=512

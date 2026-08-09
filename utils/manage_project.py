@@ -28,6 +28,7 @@ def make_weight_and_result_dir(
     settings_str, 
     wandb_exp_name, 
     exp_config_dict,
+    prev_lr_schedule_type='ws',
 ):
     now_str = dt.now().strftime("%y%m%d_%H%M%S")    
     prev_weight_dir = None
@@ -55,7 +56,8 @@ def make_weight_and_result_dir(
             print(f"found base_result_dir : {base_result_dir}")
             print(f"Resume training.")
             
-            prev_weight_dir = os.path.join(base_weight_dir, f"lr_schedule_type_ws")
+            lr_schedule_type_dir = 'lr_schedule_type' + '_' + prev_lr_schedule_type
+            prev_weight_dir = os.path.join(base_weight_dir, lr_schedule_type_dir)
             assert os.path.exists(prev_weight_dir), f"weights_dir {prev_weight_dir} does not exist for resuming."
             
                 
