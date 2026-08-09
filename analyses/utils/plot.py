@@ -1054,7 +1054,8 @@ from utils.manage_project import make_weight_and_result_dir
 def draw_entropy_accuracy_graph(
     timesteps, 
     opt_entropies_list, entropy_type,
-    accuracies_list, ode_fail_tdx, ode_fail_val, save_path
+    accuracies_list, ode_fail_tdx, ode_fail_val, save_path,
+    first_order_flag=False, second_order_flag=False,
 ):
     print(f"Draw entropy_accuracy_graph. Entropy Type : {entropy_type}")
     # Color Gradation by ODE Final Accuracy
@@ -1131,7 +1132,7 @@ def draw_entropy_accuracy_graph(
     # 3. 동적 라벨 생성 (insert 대신 조건문 사용)
     xtick_labels = [] 
     for tick in display_timesteps:
-        noise_pct = int((fixed_total_sample_step - tick) / fixed_total_sample_step * 100)
+        noise_pct = int((len(timesteps) - tick) / len(timesteps) * 100)
         xtick_labels.append(f"{tick+1}/50\n({noise_pct}%)")
     
     # 양 끝단 부가 설명 추가

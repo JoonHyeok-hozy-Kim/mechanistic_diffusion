@@ -20,7 +20,7 @@ from data.modular_addition import Inference_All_Image_Modular_Arithmetic_Dataset
 from classifier_models.manage_classifiers import get_classifier
 from analyses.utils.fourier_analysis import get_fourier_basis_and_names, get_indices_all_frequencies, \
     get_d2_indices_by_frequency
-from analyses.utils.plot import plot_pca_all_layers, plot_fve_barchart_and_heatmap, generate_gif_animation
+from analyses.utils.plot import draw_entropy_accuracy_graph
 
 RANDOM_SEED = 46
 
@@ -180,6 +180,7 @@ if __name__ == '__main__':
     
     target_layer_name = 'layers.0.feed_forward_out.hook_pre_activation'
     optimal_fves = [None] * args.sample_steps
+    optimal_fve_entropies = [None] * args.sample_steps
     ode_accuracies = [None] * args.sample_steps
         
     with torch.no_grad():
@@ -283,7 +284,8 @@ if __name__ == '__main__':
                             #     compression="gzip", compression_opts=4,
                             # )
                             
-                            optimal_fves[start_t] = fves
+                            optimal_fves[start_t] = fves.cpu().numpy()  
+                            optimal_fve_entropies[start_t] = dist.Categorical(probs=fves).entropy().cpu().numpy()
                             print(f"\t Optimal FVE added")
                             # fourier_entropy = dist.Categorical(probs=fves).entropy()        # (num_patches, )
                             # h5f_data_group["optimal_fourier_entropies"][start_t, :] = fourier_entropy.cpu().numpy()     # (num_patches, ) added.
@@ -299,7 +301,7 @@ if __name__ == '__main__':
             accuracy = correct_mask.float().mean()
             # h5f_data_group["ode_final_accuracies"][start_t] = accuracy.item()
             print(f"\t ODE Accuracy : {accuracy:.2f}")
-            ode_accuracies[start_t] = accuracy
+            ode_accuracies[start_t] = accuracy.item()
             
             # Save Final Image
             save_img_path = os.path.join(img_dir, f"label_{save_img_label}-start_t_{start_t}-final.png")
@@ -311,17 +313,26 @@ if __name__ == '__main__':
             gc.collect()
             torch.cuda.empty_cache()
         
-        # ODE Failure timestep
-        temp_ode_failure_tdx = -1
-        temp_ode_failure_val = -1
-        # for t_idx, t_accuarcy in enumerate(h5f_data_group["ode_final_accuracies"]):
-        #     if temp_ode_failure_tdx == -1 and t_accuarcy <= ode_fail_threshold_val:
-        #         temp_ode_failure_tdx = t_idx
-        #         temp_ode_failure_val = t_accuarcy
-        #         break
-        # h5f_data_group.attrs["ode_fail_threshold_tdx"] = temp_ode_failure_tdx
-        # h5f_data_group.attrs["ode_fail_threshold_val"] = temp_ode_failure_val
-        
+    # ODE Failure timestep
+    ode_fail_threshold_val = 0.05
+    temp_ode_failure_tdx = -1
+    temp_ode_failure_val = -1
+    for t_idx, t_accuarcy in enumerate(ode_accuracies):
+        if temp_ode_failure_tdx == -1 and t_accuarcy <= ode_fail_threshold_val:
+            temp_ode_failure_tdx = t_idx
+            temp_ode_failure_val = t_accuarcy
+            break
+    # h5f_data_group.attrs["ode_fail_threshold_tdx"] = temp_ode_failure_tdx
+    # h5f_data_group.attrs["ode_fail_threshold_val"] = temp_ode_failure_val
+    
+    plot_path = os.path.join(is_correct_dir, f"entropy_accuracy_dynamics_fourier_fve.png")
+    draw_entropy_accuracy_graph(
+        [i for i in range(args.sample_steps)], 
+        optimal_fve_entropies, "FVE Entropy",
+        ode_accuracies, temp_ode_failure_tdx, temp_ode_failure_val,
+        plot_path,
+    )    
+    
     print(f"Start saving sample images.")        
     for save_path, save_img in save_img_list:
         if "initial" in save_path:
