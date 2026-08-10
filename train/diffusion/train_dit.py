@@ -81,7 +81,6 @@ if __name__ == '__main__':
         config_str,
         wandb_exp_name,
         config_dict,
-        args.prev_lr_schedule_type,
     )
     
     # Following GrokkingTransformer hyperparameters: d_model=128, num_heads=4, d_ff=512

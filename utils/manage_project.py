@@ -28,11 +28,11 @@ def make_weight_and_result_dir(
     settings_str, 
     wandb_exp_name, 
     exp_config_dict,
-    prev_lr_schedule_type='ws',
 ):
     now_str = dt.now().strftime("%y%m%d_%H%M%S")    
     prev_weight_dir = None
     lr_schedule_type = exp_config_dict["lr_schedule_type"]
+    prev_lr_schedule_type = exp_config_dict["prev_lr_schedule_type"]
     
     if dry_run:
         base_weight_dir = os.path.join(in_weight_dir, f"dry_run-{now_str}")
