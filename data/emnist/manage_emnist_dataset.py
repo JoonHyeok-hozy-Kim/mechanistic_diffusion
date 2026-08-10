@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader, random_split
 import torchvision
 import torchvision.transforms as transforms
+import torchvision.utils as tvu
 
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -148,3 +149,9 @@ def apply_batch_transform(raw_tensor, img_height, img_width, swap_hw=True):
     x = (x / 127.5) - 1.0  # Normalize to [-1, 1]
     return x
 
+
+def save_sampled_mnist_images(x_src, sample, save_dir, file_name):
+    concat_img = torch.cat([x_src, sample], dim=3)
+    os.makedirs(save_dir, exist_ok=True)
+    file_path = os.path.join(save_dir, file_name)
+    tvu.save_image(concat_img, file_path, nrow=1)

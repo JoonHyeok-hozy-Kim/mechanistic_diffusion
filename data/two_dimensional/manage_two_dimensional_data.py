@@ -72,45 +72,80 @@ def plot_2d_modular_data(x_tensor, y_tensor, p, radius=1.0, save_dir=None, file_
     plt.show()
 
 
-def get_two_dimensional_image_dict(num_classes, num_images, data_radius=1.0, noise_std=0.04):
+def get_two_dimensional_image_data_dict(num_classes, num_images_per_class, data_radius=15.0, noise_std=0.5):
     x, _ = generate_2d_modular_data(
-        p=num_classes, samples_per_class=num_images, radius=data_radius, noise_std=noise_std
+        p=num_classes, samples_per_class=num_images_per_class, radius=data_radius, noise_std=noise_std
     )  # (N, 2, 1), (N, )
-    N, D, C = x.shape
-    x = x.reshape(N, C, D)
-    x = x.unsqueeze(-1)         # (N, C, H, W) = (N, 1, 2, 1)
+    
+    # # (N, C, H, W) = (N, 1, 2, 1)
+    # N, D, C = x.shape
+    # x = x.reshape(N, C, D)
+    # x = x.unsqueeze(-1)         # (N, C, H, W) = (N, 1, 2, 1)
+    
+    # (N, C, H, W) = (N, 2, 1, 1)
+    x = x.unsqueeze(-1)         # (N, C, H, W) = (N, 2, 1, 1)
+    
     res_dict = {}
     for label in range(num_classes):
-        sdx = num_images * label
-        edx = num_images * (label+1)
+        sdx = num_images_per_class * label
+        edx = num_images_per_class * (label+1)
         curr_label_tensor = x[sdx:edx]
         res_dict[label] = list(torch.unbind(curr_label_tensor, dim=0))
     return res_dict
 
 
+def squeeze_input_data(input_datapoints):
+    if len(input_datapoints.shape) == 4:
+        if input_datapoints.shape[1] == 2 and \
+            input_datapoints.shape[2] == input_datapoints.shape[3] == 1:
+                res = input_datapoints.squeeze()
+        else:
+            raise NotImplementedError(f"Unexpected shape of : {input_datapoints.shape}")
+    else:
+        raise NotImplementedError(f"Unexpected shape of : {input_datapoints.shape}") 
 
-def evaluate_2d_accuracy(generated_points, target_classes, p, radius_threshold=0.3):
-    # Input Format : (N, C, H, W)
-    N, C, H, W = generated_points.shape
-    generated_points = generated_points.squeeze(-1)         # Cancel out width-dim
-    generated_points = generated_points.reshape(N, H, C)    # 
-    generated_points = generated_points.squeeze(-1)
-    target_classes = target_classes.squeeze(-1)
-        
-    x = generated_points[:, 0]
-    y = generated_points[:, 1]
+    return res
+
+
+def determine_classes(squeezed_datapoints, p):
+    assert len(squeezed_datapoints.shape) == 2 and squeezed_datapoints.shape[1] == 2, \
+        f"Assumed shape is (N, C), but provided : {squeezed_datapoints.shape}"
     
-    radii = torch.sqrt(x**2 + y**2)
-    valid_radius_mask = radii >= radius_threshold
+    x = squeezed_datapoints[:, 0]
+    y = squeezed_datapoints[:, 1]
     
     angles = torch.atan2(y, x)
     angles = angles % (2 * np.pi)
-    shift_angle = np.pi / p
+    shift_angle = np.pi / p             # Shift by half (2*pi / p)
     shifted_angles = (angles + shift_angle) % (2 * np.pi)
     
     predicted_classes = torch.floor(shifted_angles / (2 * np.pi / p)).long()
-    is_correct = (predicted_classes == target_classes) & valid_radius_mask
     
+    return predicted_classes
+
+
+def get_radii(squeezed_datapoints):
+    x = squeezed_datapoints[:, 0]
+    y = squeezed_datapoints[:, 1]
+    
+    return torch.sqrt(x**2 + y**2)
+    
+
+def evaluate_2d_accuracy(generated_points, target_classes, p, radius_threshold=1.0):
+    # Input Format : (N, C, H, W)
+    # N, C, H, W = generated_points.shape
+    # generated_points = generated_points.squeeze(-1)         # Cancel out width-dim
+    # # generated_points = generated_points.reshape(N, H, C)    # For the prev shape of (N, 1, 2, 1) 
+    # generated_points = generated_points.squeeze(-1)
+    
+    sqzd_datapoints = squeeze_input_data(generated_points)
+    predicted_classes = determine_classes(sqzd_datapoints, p)
+    target_classes = target_classes.squeeze(-1)
+        
+    radii = get_radii(sqzd_datapoints)
+    valid_radius_mask = radii >= radius_threshold
+    
+    is_correct = (predicted_classes == target_classes) & valid_radius_mask    
     accuracy = is_correct.float().mean().item()
     
     return accuracy, predicted_classes
@@ -183,7 +218,6 @@ def plot_2d_answer_and_pred(pred_points, answer_labels, label_a=None, label_b=No
         is_correct_str = "Correct" if correct_mask[i] else "Wrong"
         color = 'green' if correct_mask[i] else 'red'
         
-        # 이제 pred_points_np[i, 0]은 깔끔한 float 스칼라 값입니다!
         p_x = pred_points_np[i, 0]
         p_y = pred_points_np[i, 1]        
         pp = answer_labels_np[i]
@@ -265,16 +299,17 @@ if __name__ == "__main__":
     # plot_2d_modular_data(data_x_squeezed, data_y, p=P)
     
     
-    letter_dict = get_two_dimensional_image_dict(num_classes=P, num_images=N)
+    letter_dict = get_two_dimensional_image_data_dict(num_classes=P, num_images=N)
     for k, v in letter_dict.items():
         y = torch.Tensor(np.repeat(k, N))
         v = torch.stack(v, dim=0)
         accuracy, _ = evaluate_2d_accuracy(v, y, P)
         print(f"For p={k}, accuracy = {accuracy:.2f}")
         v = v.squeeze(-1)
-        n, c, d = v.shape
-        x = v.reshape(n, d, c)
-        x = x.squeeze(-1)
-        plot_2d_modular_data(x, y, p=P, file_name=f"label_plot-p={k}-accy_{accuracy:.2f}")
-    
+        # n, c, d = v.shape
+        # x = v.reshape(n, d, c)
+        # x = x.squeeze(-1)
+        # plot_2d_modular_data(x, y, p=P, file_name=f"label_plot-p={k}-accy_{accuracy:.2f}")
+        plot_2d_modular_data(v, y, p=P, file_name=f"label_plot-p={k}-accy_{accuracy:.2f}")
+
     

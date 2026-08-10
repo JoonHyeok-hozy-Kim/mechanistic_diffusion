@@ -121,10 +121,11 @@ def get_config_str_dict(args):
         if arg_key in (
             "generative_model_path", "classifier_weights_path", "output_dir", 
             "epochs", "batch_size", "sample_freq", "dry_run", "resume_wandb_url",
-            "source_data_confidence_threshold", 
+            "source_data_confidence_threshold", "prev_lr_schedule_type",
+            "channel_size", "image_size",
         ):
             continue
-        if type(arg_val) == bool:
+        elif type(arg_val) == bool:
             continue
             # config_str_list.append(f"{arg_key}")
         else:

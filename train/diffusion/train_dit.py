@@ -15,7 +15,7 @@ from utils.seed import seed_everything
 from utils.lr import get_lr_schedule, set_lr
 from models.dit import DiT_Llama
 from models.rf import RF
-from data.manage_dataset import get_confident_image_data_dict
+from data.manage_dataset import get_confident_image_data_dict, save_sample_data
 from data.modular_addition import Modular_Arithmetic_Dataset
 from classifier_models.manage_classifiers import get_classifier
 
@@ -29,6 +29,8 @@ if __name__ == '__main__':
         parser.add_argument("--classifier_weights_path", type=str, default="weights/classifier_resnet_reserved")
         parser.add_argument("--output_dir", type=str, default="results/")
         parser.add_argument("--dataset_name", type=str, default="emnist", help="Dataset type. e.g. emnist, kmnist, two_dimensional")
+        parser.add_argument("--channel_size", type=int, default=1, help="Channel size of the input image. 2 for 2D data.")
+        parser.add_argument("--image_size", type=int, default=32, help="Width and Height of the input image")
         parser.add_argument("--p", type=int, default=97, help="Modulus for modular arithmetic (should be <= 97 for all characters: A-Z, a-z, 0-9, special chars)")
         parser.add_argument("--train_fraction", type=float, default=0.7)
         parser.add_argument("--num_images_per_class", type=int, default=1)
@@ -98,7 +100,7 @@ if __name__ == '__main__':
     )
     kwargs.update(common_kwargs)
         
-    model = DiT_Llama(in_channels=1, input_size=32, patch_size=args.patch_size, **kwargs).cuda()
+    model = DiT_Llama(in_channels=args.channel_size, input_size=args.image_size, patch_size=args.patch_size, **kwargs).cuda()
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {model_size}, {model_size / 1e6}M")    
     
@@ -112,11 +114,12 @@ if __name__ == '__main__':
         start_epoch = 0
     
     # Needs Implementation!
-    classifier = get_classifier(dataset_name=args.dataset_name).to(device)
-        
+    classifier = get_classifier(dataset_name=args.dataset_name, num_classes=args.p).to(device)
+    
     source_img_data_dict = get_confident_image_data_dict(
         args.dataset_name, args.p, args.num_images_per_class, 
         classifier, args.source_data_confidence_threshold,
+        img_height=args.image_size, img_width=args.image_size,
     )
     
     ds_train = Modular_Arithmetic_Dataset(
@@ -183,26 +186,27 @@ if __name__ == '__main__':
 
         rf.model.eval()
         with torch.no_grad():
-            _, x_src_train, label_tgt_train, _, _ = next(iter(dl_train))
-            _, x_src_valid, label_tgt_valid, _, _ = next(iter(dl_valid))
+            _, x_src_train, label_tgt_train, label_a_train, label_b_train = next(iter(dl_train))
+            _, x_src_valid, label_tgt_valid, label_a_valid, label_b_valid = next(iter(dl_valid))
             batch_size_train = x_src_train.size(0)
             batch_size_valid = x_src_valid.size(0)
-            x_tgt_train = torch.randn(batch_size_train, 1, 32, 32).cuda()
-            x_tgt_valid = torch.randn(batch_size_valid, 1, 32, 32).cuda()
+            x_tgt_train = torch.randn(batch_size_train, args.channel_size, args.image_size, args.image_size).cuda()
+            x_tgt_valid = torch.randn(batch_size_valid, args.channel_size, args.image_size, args.image_size).cuda()
             x_src_train, label_tgt_train = x_src_train.cuda(), label_tgt_train.cuda()
             x_src_valid, label_tgt_valid = x_src_valid.cuda(), label_tgt_valid.cuda()
-            images_train = rf.sample(x_tgt_train, x_src_train)
-            images_valid = rf.sample(x_tgt_valid, x_src_valid)
+            
+            samples_train = rf.sample(x_tgt_train, x_src_train)
+            samples_valid = rf.sample(x_tgt_valid, x_src_valid)
             
             # Evaluate on Training data
-            logits = classifier(images_train[-1].detach())
+            logits = classifier(samples_train[-1].detach())
             preds = torch.argmax(logits, dim=1).cpu().numpy()
             
             label_tgt = label_tgt_train.cpu().numpy()
             train_accuracy = (preds == label_tgt).mean()
 
             # Evaluate on Validation data
-            logits = classifier(images_valid[-1].detach())
+            logits = classifier(samples_valid[-1].detach())
             preds = torch.argmax(logits, dim=1).cpu().numpy()
                             
             label_tgt = label_tgt_valid.cpu().numpy()
@@ -235,16 +239,12 @@ if __name__ == '__main__':
                 valid_accuracy - curr_max_valid_accuracy > 0.05 or \
                 epoch % save_weight_freq == 0
             ):  
-                num_vis = 4
-                # Concat x_src (B,1,32,64) and image_<> (B,1,32,32)
-                result_train = torch.cat(
-                    [x_src_train[:num_vis], images_train[-1][:num_vis]], dim=3
-                )  # (num_vis, 1, 32, 96)
-                result_valid = torch.cat(
-                    [x_src_valid[:num_vis], images_valid[-1][:num_vis]], dim=3
-                )  # (num_vis, 1, 32, 96)
-                tvu.save_image(result_train, f"{result_dir}/sample_{epoch}_train(trn_{train_accuracy:.2f}-val_{valid_accuracy:.2f}).png", nrow=1)
-                tvu.save_image(result_valid, f"{result_dir}/sample_{epoch}_valid(trn_{train_accuracy:.2f}-val_{valid_accuracy:.2f}).png", nrow=1)
+                save_sample_data(
+                    args.dataset_name, args.p, x_src_train, samples_train[-1],
+                    label_tgt_train, label_a_train, label_b_train,
+                    result_dir, f"sample_{epoch}_train(trn_{train_accuracy:.2f}-val_{valid_accuracy:.2f}).png"
+                )
+                    
                 curr_max_train_accuracy = max(curr_max_train_accuracy, train_accuracy)
                 curr_max_valid_accuracy = max(curr_max_valid_accuracy, valid_accuracy)        
             
