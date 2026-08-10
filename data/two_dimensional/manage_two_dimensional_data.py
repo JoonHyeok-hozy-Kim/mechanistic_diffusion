@@ -6,7 +6,10 @@ import os
 from datetime import datetime
 from utils.seed import seed_everything
 
-def generate_2d_modular_data(p, samples_per_class, radius=1.0, noise_std=0.05):
+RADIUS = 15.0
+NOISE_STD = 0.5
+
+def generate_2d_modular_data(p, samples_per_class, radius, noise_std):
     classes = np.repeat(np.arange(p), samples_per_class)
     angles = (2 * np.pi / p) * classes
     
@@ -72,7 +75,7 @@ def plot_2d_modular_data(x_tensor, y_tensor, p, radius=1.0, save_dir=None, file_
     plt.show()
 
 
-def get_two_dimensional_image_data_dict(num_classes, num_images_per_class, data_radius=15.0, noise_std=0.5):
+def get_two_dimensional_image_data_dict(num_classes, num_images_per_class, data_radius, noise_std):
     x, _ = generate_2d_modular_data(
         p=num_classes, samples_per_class=num_images_per_class, radius=data_radius, noise_std=noise_std
     )  # (N, 2, 1), (N, )

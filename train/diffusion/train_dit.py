@@ -103,7 +103,8 @@ if __name__ == '__main__':
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {model_size}, {model_size / 1e6}M")    
     
-    rf = RF(model, time_sampling_type="uniform_skewed", noise_schedule=args.noise_schedule)
+    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
+    rf = RF(model, time_sampling_type=time_sampling_type, noise_schedule=args.noise_schedule)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         
     # Resume from the previous run.

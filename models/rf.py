@@ -79,8 +79,8 @@ class RF:
             x_tgt = (1 - t_tensor) * x_src + (t_tensor) * noise
         elif self.noise_schedule == 'vp':
             # VP (Variance Preserving) - Cosine Schedule
-            alpha_t = math.cos(t_tensor * math.pi / 2)
-            sigma_t = math.sin(t_tensor * math.pi / 2)
+            alpha_t = torch.cos(t_tensor * math.pi / 2)
+            sigma_t = torch.sin(t_tensor * math.pi / 2)
             
             x_tgt = alpha_t * x_src + sigma_t * noise
         elif self.noise_schedule == 've':            
