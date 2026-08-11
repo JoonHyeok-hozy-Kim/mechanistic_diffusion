@@ -208,7 +208,6 @@ class DiT_Llama(nn.Module):
         use_layer_norm=False,
         use_rope_2d=False,
         use_ffn_residual=False,
-        prediction_target="x",       
         **kwargs,
     ):
         super().__init__()
@@ -217,9 +216,6 @@ class DiT_Llama(nn.Module):
         self.out_channels = in_channels
         self.input_size = input_size
         self.patch_size = patch_size
-        
-        # assert prediction_target in ("x", "v"), f"Unexpected prediction_target={prediction_target}"
-        self.prediction_target = prediction_target
 
         self.x_embedder = nn.Linear(patch_size * patch_size * in_channels, dim, bias=True)
         nn.init.constant_(self.x_embedder.bias, 0)
@@ -312,51 +308,18 @@ class DiT_Llama(nn.Module):
         x = self.final_layer(x, adaln_input)
         x = self.unpatchify(x)  # (N, out_channels, H, 3*W)
         
-        network_out_x = x[:, :src_channels, :src_height, :src_width]
-        
-        if self.prediction_target == "v":
-            '''
-            Outut : f(z_t, t) = v : v-prediction
-            '''            
-            return network_out_x
-        else:
-            x_diff = input_x - network_out_x     # z_t - f(z_t, t)
-            t_reshaped = t.view(-1, *([1] * (x_diff.ndim - 1)))
-            
-            if self.prediction_target == "x":
-                '''
-                Output : (z_t - f(z_t, t)) / t
-                Then in RF, loss = || z_1 - x - ((z_t - f(z_t, t)) / t) ||^2
-                                = || z_1 - x - ((t*z_1 + (1-t)x - f(z_t, t)) / t) ||^2
-                                = || - (( x - f(z_t, t)) / t) ||^2
-                Thus, x = f(z_t, t) : x-prediction
-                '''
-                return x_diff / t_reshaped
-            
-            elif self.prediction_target == "epsilon":
-                '''
-                Divide the output with t for the ε-prediction
-                Output : (f(z_t, t) - z_t) / (1-t)
-                Then in RF, loss = || z_1 - x - (f(z_t, t) - z_t) / (1-t) ||^2
-                                = || z_1 - (z_t - t*z_1) / (1-t) - (f(z_t, t) - z_t) / (1-t) ||^2
-                                = || (z_1 - f(z_t, t)) / (1-t) ||^2
-                                = || (ε - f(z_t, t)) / (1-t) ||^2
-                Thus, ε = f(z_t, t) : ε-prediction
-                '''
-                return -x_diff / (1 - t_reshaped)
-            else:
-                ValueError(f"Unexpected prediction_target : {self.prediction_target}")
-                
+        network_out_x = x[:, :src_channels, :src_height, :src_width]        
+        return network_out_x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
         model_out = self.forward(combined, t, y)
-        eps, rest = model_out[:, : self.in_channels], model_out[:, self.in_channels :]
-        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
-        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return torch.cat([eps, rest], dim=1)
+        pred, rest = model_out[:, : self.in_channels], model_out[:, self.in_channels :]
+        cond_pred, uncond_pred = torch.split(pred, len(pred) // 2, dim=0)
+        half_pred = uncond_pred + cfg_scale * (cond_pred - uncond_pred)
+        pred = torch.cat([half_pred, half_pred], dim=0)
+        return torch.cat([pred, rest], dim=1)
 
     @staticmethod
     def precompute_freqs_cis_2d(dim, height, width, theta=10000.0):
@@ -447,3 +410,5 @@ class DiT_Llama(nn.Module):
             if "hook_post_activation" in name:
                 module.neutralize_target_vectors = None
                 module.remove_hooks('fwd')
+
+

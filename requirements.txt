@@ -7,7 +7,7 @@ einops
 scikit-learn 
 matplotlib 
 pillow
-h5py
-pytorch-msssim
+# h5py
+# pytorch-msssim
 kagglehub
 huggingface_hub

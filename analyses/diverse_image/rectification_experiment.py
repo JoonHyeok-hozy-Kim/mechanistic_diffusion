@@ -32,6 +32,8 @@ if __name__ == '__main__':
         parser.add_argument("--classifier_weights_path", type=str, default="weights/classifier_resnet_reserved")
         parser.add_argument("--output_dir", type=str, default="results/")
         parser.add_argument("--dataset_name", type=str, default="emnist", help="Dataset type. e.g. emnist, kmnist, two_dimensional")
+        parser.add_argument("--channel_size", type=int, default=1, help="Channel size of the input image. 2 for 2D data.")
+        parser.add_argument("--image_size", type=int, default=32, help="Width and Height of the input image")
         parser.add_argument("--p", type=int, default=97, help="Modulus for modular arithmetic (should be <= 97 for all characters: A-Z, a-z, 0-9, special chars)")
         parser.add_argument("--num_images_per_class", type=int, default=256)
         parser.add_argument("--source_data_confidence_threshold", type=float, default=0.9, help="Confidence threshold for adding source image to the dataset")       
@@ -83,12 +85,12 @@ if __name__ == '__main__':
         raise ValueError(f"Invalid model size: {args.model_size}")
     
     common_kwargs = dict(
-        prediction_target=args.prediction_target, ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
+        ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
         use_layer_norm=args.use_layer_norm, use_rope_2d=args.use_rope_2d, use_ffn_residual=args.use_ffn_residual, 
     )
     kwargs.update(common_kwargs)
             
-    model = DiT_Llama(in_channels=1, input_size=32, patch_size=args.patch_size, **kwargs).cuda()   
+    model = DiT_Llama(in_channels=args.channel_size, input_size=args.image_size, patch_size=args.patch_size, **kwargs).cuda()   
     
     # Load trained weights
     print(f"Loading model weights from {args.generative_model_path}")
@@ -112,12 +114,19 @@ if __name__ == '__main__':
     model.remove_all_hooks()
     model.cache_all(cache)
         
-    rf = RF(model, time_sampling_type="uniform_skewed", noise_schedule=args.noise_schedule)
-        
-    classifier = get_classifier(dataset_name=args.dataset_name).to(device)    
+    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
+    rf = RF(
+        model, 
+        time_sampling_type=time_sampling_type, 
+        prediction_target=args.prediction_target, 
+        noise_schedule=args.noise_schedule
+    )
+            
+    classifier = get_classifier(dataset_name=args.dataset_name, num_classes=args.p).to(device) 
     source_img_data_dict = get_confident_image_data_dict(
         args.dataset_name, args.p, args.num_images_per_class, 
         classifier, args.source_data_confidence_threshold,
+        img_height=args.image_size, img_width=args.image_size,
     )
     
     ds_all = Inference_All_Image_Modular_Arithmetic_Dataset(
@@ -204,9 +213,12 @@ if __name__ == '__main__':
             for sample_t in range(curr_sample_step, 0, -1):
                 t_scalar = sample_t / args.sample_steps            
                 t_tensor = torch.tensor([t_scalar] * B).to(x_tgt.device)
+                t_expanded = t_tensor.view([B, *([1] * len(x_tgt.shape[1:]))])
 
-                vc = model(x_tgt, t_tensor, x_src)
-                x_tgt = x_tgt - dt_tensor * vc 
+                # Sample
+                pred = model(x_tgt, t_tensor, x_src)
+                v_pred = rf.convert_pred_to_v_pred(x_tgt, pred, t_expanded)
+                x_tgt = x_tgt - dt_tensor * v_pred     # Instantiate new x_tgt everytime.
                 
                 # Calculate optimal FVE only
                 if sample_t == curr_sample_step:

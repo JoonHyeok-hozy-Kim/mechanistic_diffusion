@@ -119,8 +119,9 @@ if __name__ == '__main__':
         parser.add_argument("--classifier_weights_path", type=str, default="weights/classifier_resnet_reserved")
         parser.add_argument("--output_dir", type=str, default="results/")
         parser.add_argument("--dataset_name", type=str, default="emnist", help="Dataset type. e.g. emnist, kmnist, two_dimensional")
+        parser.add_argument("--channel_size", type=int, default=1, help="Channel size of the input image. 2 for 2D data.")
+        parser.add_argument("--image_size", type=int, default=32, help="Width and Height of the input image")
         parser.add_argument("--p", type=int, default=97, help="Modulus for modular arithmetic (should be <= 97 for all characters: A-Z, a-z, 0-9, special chars)")
-        # parser.add_argument("--train_fraction", type=float, default=0.7)
         parser.add_argument("--num_images_per_class", type=int, default=1)
         parser.add_argument("--source_data_confidence_threshold", type=float, default=0.9, help="Confidence threshold for adding source image to the dataset")       
         parser.add_argument("--patch_size", type=int, default=2, help="Patch size for the model")
@@ -130,19 +131,10 @@ if __name__ == '__main__':
         parser.add_argument("--depth", type=int, default=10)
         parser.add_argument("--ffn_type", type=str, default="gelu", choices=["swiglu", "gelu"], help="Choose FFN type : swiglu, gelu")
         parser.add_argument("--use_ffn_sandwich", action="store_true", help="Use prepending ffn to self-attention")
-        # parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate for optimizer")
-        # parser.add_argument("--lr_schedule_type", type=str, default="wsd", choices=["wsd", "ws", "d", "cos"], help="Choose LR scheduler type")
-        # parser.add_argument("--weight_decay", type=float, default=10.0, help="Weight decay for optimizer")
         parser.add_argument("--use_layer_norm", action="store_true", help="Apply LayerNorm in Transformer and FinalLayer blocks")
         parser.add_argument("--use_rope_2d", action="store_true", help="Apply rope 2d on Attention layers")
         parser.add_argument("--use_ffn_residual", action="store_true", help="Use residual connection at FFN")
-        # parser.add_argument("--epochs", type=int, default=1)
-        # parser.add_argument("--batch_size", type=int, default=512)
         parser.add_argument("--sample_steps", type=int, default=1)
-        # parser.add_argument("--sample_freq", type=int, default=1)
-        # parser.add_argument("--dry_run", action="store_true", help="Do not recored to wandb")
-        # parser.add_argument("--resume_wandb_url", type=str, default=None, help="URL of the run to resume")
-        parser.add_argument("--correct_result_img", action="store_true", help="Correct result image at position c")
         parser.add_argument("--latex_formatted_out", action="store_true", help="Latex formatted output")
         parser.add_argument("--ffn_out_pre_act_only", action="store_true", help="Target only the FFN out Pre-activation layer.")
         return parser.parse_args()
@@ -175,12 +167,12 @@ if __name__ == '__main__':
         raise ValueError(f"Invalid model size: {args.model_size}")
     
     common_kwargs = dict(
-        prediction_target=args.prediction_target, ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
+        ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
         use_layer_norm=args.use_layer_norm, use_rope_2d=args.use_rope_2d, use_ffn_residual=args.use_ffn_residual, 
     )
     kwargs.update(common_kwargs)
             
-    model = DiT_Llama(in_channels=1, input_size=32, patch_size=args.patch_size, **kwargs).cuda()   
+    model = DiT_Llama(in_channels=args.channel_size, input_size=args.image_size, patch_size=args.patch_size, **kwargs).cuda()   
     
     # Load trained weights
     print(f"Loading model weights from {args.generative_model_path}")
@@ -204,12 +196,19 @@ if __name__ == '__main__':
     model.remove_all_hooks()
     model.cache_all(cache)
         
-    rf = RF(model, time_sampling_type="uniform_skewed", noise_schedule=args.noise_schedule)
-        
-    classifier = get_classifier(dataset_name=args.dataset_name).to(device)    
+    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
+    rf = RF(
+        model, 
+        time_sampling_type=time_sampling_type, 
+        prediction_target=args.prediction_target, 
+        noise_schedule=args.noise_schedule
+    )
+            
+    classifier = get_classifier(dataset_name=args.dataset_name, num_classes=args.p).to(device)    
     source_img_data_dict = get_confident_image_data_dict(
         args.dataset_name, args.p, args.num_images_per_class, 
         classifier, args.source_data_confidence_threshold,
+        img_height=args.image_size, img_width=args.image_size,
     )
     
     ds_all = Operand_Sorted_Modular_Arithmetic_Dataset(
@@ -272,6 +271,7 @@ if __name__ == '__main__':
                 print("==> skip")
                 continue
             os.makedirs(layer_dir, exist_ok=True)
+            # continue
             
             hidden_dim = layer_activation.shape[2]
             layer_activation = layer_activation.view(args.p, args.p, num_patches * num_variables, hidden_dim)  # (P_a, P_b, num_patches * num_variables, D)
@@ -328,7 +328,7 @@ if __name__ == '__main__':
                 print("==> skip")
                 continue
             os.makedirs(layer_dir, exist_ok=True)
-        
+            # continue
             num_heads, head_dim = layer_activation.shape[2:]  # num_heads, head_dim
             
             layer_activation = layer_activation.reshape(args.p, args.p, num_patches * num_variables, num_heads, head_dim)    # (P_a, P_b, num_patches * num_variables, num_heads, head_dim)
@@ -383,6 +383,7 @@ if __name__ == '__main__':
                 print("==> skip")
                 continue
             os.makedirs(layer_dir, exist_ok=True)
+            # continue
             
             num_heads = layer_activation.shape[1]
             cdx = 0  # 'c' variable index in variables
@@ -445,6 +446,7 @@ if __name__ == '__main__':
                 print("==> skip")
                 continue
             os.makedirs(layer_dir, exist_ok=True)
+            # continue
             
             num_heads = model.layers[0].attention.n_heads
             head_dim = model.layers[0].attention.head_dim        
@@ -504,6 +506,7 @@ if __name__ == '__main__':
                 print("==> skip")
                 continue
             os.makedirs(layer_dir, exist_ok=True)
+            # continue
             
             curr_dim = layer_activation.shape[2]
             layer_activation = layer_activation.view(args.p, args.p, num_patches * num_variables, curr_dim)  # (P_a, P_b, num_patches * num_variables, D)

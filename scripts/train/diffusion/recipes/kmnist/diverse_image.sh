@@ -1,0 +1,34 @@
+#!/bin/bash
+
+TRAIN_DIT_SCRIPT_PATH="scripts/train/diffusion/train_dit.sh"
+
+if [ ! -x "${TRAIN_DIT_SCRIPT_PATH}" ]; then
+  chmod +x "${TRAIN_DIT_SCRIPT_PATH}"
+fi
+
+"${TRAIN_DIT_SCRIPT_PATH}" \
+    --dataset_name "kmnist" \
+    --channel_size 1 \
+    --image_size 32 \
+    --p 47 \
+    --train_fraction 0.9 \
+    --num_images_per_class 256 \
+    --source_data_confidence_threshold 0.8 \
+    --patch_size 32 \
+    --model_size "XL" \
+    --prediction_target "x" \
+    --noise_schedule "linear" \
+    --depth 1 \
+    --ffn_type "gelu" \
+    --lr 3e-4 \
+    --lr_schedule_type "ws" \
+    --weight_decay 0.01 \
+    --epochs 300000 \
+    --batch_size 4096 \
+    --timestep_sampling_type "normal" \
+    --sample_freq 10000 \
+    --use_ffn_sandwich \
+    --use_layer_norm \
+    --use_rope_2d \
+    --use_ffn_residual
+    # --dry_run

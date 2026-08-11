@@ -127,13 +127,17 @@ def get_config_str_dict(args):
             continue
         elif type(arg_val) == bool:
             continue
-            # config_str_list.append(f"{arg_key}")
+        elif arg_key == 'dataset_name':
+            config_str_list.append(f"{arg_val}")    
+        elif arg_key == 'prediction_target':
+            config_str_list.append(f"{arg_val}_pred")    
+        elif arg_key == 'timestep_sampling_type':
+            config_str_list.append(f"timestep_sampling_{arg_val}")    
         else:
             config_str_list.append(f"{arg_key}_{arg_val}")    
     
     config_str = "-".join(config_str_list)
     return config_dict, config_str
-
                 
                 
 def get_checkpoint_start_epoch_and_resume(prev_weights_dir, optimizer, model, choose_final=False):

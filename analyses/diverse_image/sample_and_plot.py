@@ -30,6 +30,8 @@ if __name__ == '__main__':
         parser.add_argument("--classifier_weights_path", type=str, default="weights/classifier_resnet_reserved")
         parser.add_argument("--output_dir", type=str, default="results/")
         parser.add_argument("--dataset_name", type=str, default="emnist", help="Dataset type. e.g. emnist, kmnist, two_dimensional")
+        parser.add_argument("--channel_size", type=int, default=1, help="Channel size of the input image. 2 for 2D data.")
+        parser.add_argument("--image_size", type=int, default=32, help="Width and Height of the input image")
         parser.add_argument("--p", type=int, default=97, help="Modulus for modular arithmetic (should be <= 97 for all characters: A-Z, a-z, 0-9, special chars)")
         parser.add_argument("--num_images_per_class", type=int, default=256)
         parser.add_argument("--source_data_confidence_threshold", type=float, default=0.9, help="Confidence threshold for adding source image to the dataset")       
@@ -77,12 +79,12 @@ if __name__ == '__main__':
         raise ValueError(f"Invalid model size: {args.model_size}")
     
     common_kwargs = dict(
-        prediction_target=args.prediction_target, ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
+        ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
         use_layer_norm=args.use_layer_norm, use_rope_2d=args.use_rope_2d, use_ffn_residual=args.use_ffn_residual, 
     )
     kwargs.update(common_kwargs)
             
-    model = DiT_Llama(in_channels=1, input_size=32, patch_size=args.patch_size, **kwargs).cuda()   
+    model = DiT_Llama(in_channels=args.channel_size, input_size=args.image_size, patch_size=args.patch_size, **kwargs).cuda()   
     
     # Load trained weights
     print(f"Loading model weights from {args.generative_model_path}")
@@ -106,12 +108,19 @@ if __name__ == '__main__':
     model.remove_all_hooks()
     model.cache_all(cache)
         
-    rf = RF(model, time_sampling_type="uniform_skewed", noise_schedule=args.noise_schedule)
-        
-    classifier = get_classifier(dataset_name=args.dataset_name).to(device)    
+    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
+    rf = RF(
+        model, 
+        time_sampling_type=time_sampling_type, 
+        prediction_target=args.prediction_target, 
+        noise_schedule=args.noise_schedule
+    )
+            
+    classifier = get_classifier(dataset_name=args.dataset_name, num_classes=args.p).to(device)    
     source_img_data_dict = get_confident_image_data_dict(
         args.dataset_name, args.p, args.num_images_per_class, 
         classifier, args.source_data_confidence_threshold,
+        img_height=args.image_size, img_width=args.image_size,
     )
     
     ds_all = Inference_All_Image_Modular_Arithmetic_Dataset(
@@ -125,9 +134,7 @@ if __name__ == '__main__':
     num_variables = len(variables)
     
     # Patch related parameters
-    input_size = model.input_size
-    patch_size = model.patch_size
-    grid_size = input_size // patch_size
+    grid_size = args.image_size // args.patch_size
     num_patches = grid_size ** 2
     patch_indices_by_variable = []
     for i in range(num_variables):
@@ -168,6 +175,7 @@ if __name__ == '__main__':
             'bar_chart_title': f"Result 'c' FFN pre-GeLU Layer FVE values",
         }        
     }
+    fve_all_time_max_val = [None, None]
     
     B = answer_img.size(0)
     dt = 1.0 / args.sample_steps
@@ -186,10 +194,12 @@ if __name__ == '__main__':
             if args.prediction_target == 'epsilon':
                 t_scalar = min(t_scalar, 0.99)
             t_tensor = torch.tensor([t_scalar] * B).to(x_tgt.device)
+            t_expanded = t_tensor.view([B, *([1] * len(x_tgt.shape[1:]))])
             
             # Sample
-            vc = model(x_tgt, t_tensor, x_src)
-            x_tgt = x_tgt - dt * vc     # Instantiate new x_tgt everytime.
+            pred = model(x_tgt, t_tensor, x_src)
+            v_pred = rf.convert_pred_to_v_pred(x_tgt, pred, t_expanded)
+            x_tgt = x_tgt - dt * v_pred     # Instantiate new x_tgt everytime.
             
             # Make predictions
             if args.plot_fve:            
@@ -277,12 +287,15 @@ if __name__ == '__main__':
                     os.makedirs(fve_patch_dir, exist_ok=True)  
                     fve_img_path = os.path.join(fve_patch_dir, f"fve_timestep_{time_step_cnt:02d}.png")
                     title = f"Inference and FVEs (Timestep: {time_step_cnt:02d}, Accy: {accuracy:.2f})"
-                    plot_fve_barchart_and_heatmap(
+                    curr_max_fve_val1, curr_max_fve_val2 = plot_fve_barchart_and_heatmap(
                         args.p, x_src, x_tgt, correct_mask, low_confidence_mask, 
                         fve_activations[pdx][0], fve_activations[pdx][1],
                         num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs,
-                        fve_img_path, title=title, sub_bar1_title=fve_bar_chart_titles[0], sub_bar2_title=fve_bar_chart_titles[1]
+                        fve_img_path, title=title, sub_bar1_title=fve_bar_chart_titles[0], sub_bar2_title=fve_bar_chart_titles[1],
+                        max_fve_val1=fve_all_time_max_val[0], max_fve_val2=fve_all_time_max_val[1], 
                     )
+                    fve_all_time_max_val[0] = curr_max_fve_val1 if fve_all_time_max_val[0] is None else max(curr_max_fve_val1, fve_all_time_max_val[0])
+                    fve_all_time_max_val[1] = curr_max_fve_val2 if fve_all_time_max_val[1] is None else max(curr_max_fve_val2, fve_all_time_max_val[1])
             
             # Plot PCA                
             if args.plot_pca:             

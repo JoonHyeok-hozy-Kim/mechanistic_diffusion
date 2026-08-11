@@ -605,6 +605,8 @@ def render_bar_graph_two_degree_neuron_level_on_ax(ax, fourier_coeffs_2d, num_fr
         max_fve_val = max(fves_to_plot) * 1.2 if len(fves_to_plot) > 0 else 1.0
     ax.set_ylim(0, max_fve_val)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
+    
+    return max_fve_val
 
 
 def render_bar_graph_two_degree_head_level_on_ax(fig, ax, fourier_coeffs_2d, num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs, title=None, max_fve_val=None):
@@ -888,6 +890,7 @@ def plot_fve_barchart_and_heatmap(
     act1_fourier_d2, act2_fourier_d2, 
     num_freqs, num_2d_bases, two_degree_idxes, two_degree_idxes_descs,
     save_dir, title=None, sub_bar1_title=None, sub_bar2_title=None,
+    max_fve_val1=None, max_fve_val2=None,
 ):
     fig = plt.figure(figsize=(24, 12))
     outer_gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1, 1.5], wspace=0.02)
@@ -935,10 +938,10 @@ def plot_fve_barchart_and_heatmap(
     ax_v_bar = fig.add_subplot(inner_gs[0, 0])
     ax_v_hm = fig.add_subplot(inner_gs[0, 1])
 
-    render_bar_graph_two_degree_neuron_level_on_ax(
+    max_fve_val1 = render_bar_graph_two_degree_neuron_level_on_ax(
         ax_v_bar, act1_fourier_d2, num_freqs, 
         num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
-        title=sub_bar1_title,
+        title=sub_bar1_title, max_fve_val=max_fve_val1,
     )
     
     render_heatmap_neuron_level_on_ax(
@@ -951,10 +954,10 @@ def plot_fve_barchart_and_heatmap(
     ax_ff_bar = fig.add_subplot(inner_gs[1, 0])
     ax_ff_hm = fig.add_subplot(inner_gs[1, 1])
 
-    render_bar_graph_two_degree_neuron_level_on_ax(
+    max_fve_val2 = render_bar_graph_two_degree_neuron_level_on_ax(
         ax_ff_bar, act2_fourier_d2, num_freqs, 
         num_2d_bases=num_2d_bases, two_degree_idxes=two_degree_idxes, two_degree_idxes_descs=two_degree_idxes_descs,
-        title=sub_bar2_title,
+        title=sub_bar2_title, max_fve_val=max_fve_val2,
     )
     
     render_heatmap_neuron_level_on_ax(
@@ -971,6 +974,7 @@ def plot_fve_barchart_and_heatmap(
     plt.savefig(save_dir, dpi=80)
     plt.close(fig)
 
+    return max_fve_val1, max_fve_val2
 
 
 def generate_gif_animation(root_dir, file_name):

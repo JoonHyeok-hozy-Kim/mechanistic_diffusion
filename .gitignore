@@ -7,6 +7,7 @@ data/emnist/EMNIST/
 data/emnist/index/
 data/kmnist/KMNIST/
 logs/
+prev_code_archive/
 results/
 temp/
 venv/

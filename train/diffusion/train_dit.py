@@ -50,6 +50,7 @@ if __name__ == '__main__':
         parser.add_argument("--use_ffn_residual", action="store_true", help="Use residual connection at FFN")
         parser.add_argument("--epochs", type=int, default=1)
         parser.add_argument("--batch_size", type=int, default=512)
+        parser.add_argument("--timestep_sampling_type", type=str, default="normal", choices=['normal', 'uniform', 'uniform_skewed'], help="Timestep sampling distribution type for the rectified flow model")
         parser.add_argument("--sample_freq", type=int, default=1)
         parser.add_argument("--dry_run", action="store_true", help="Do not recored to wandb")
         parser.add_argument("--resume_wandb_url", type=str, default=None, help="URL of the run to resume")
@@ -94,7 +95,7 @@ if __name__ == '__main__':
         raise ValueError(f"Invalid model size: {args.model_size}")
     
     common_kwargs = dict(
-        prediction_target=args.prediction_target, ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
+        ffn_type=args.ffn_type, use_ffn_sandwich=args.use_ffn_sandwich, ffn_dim_multiplier=1,
         use_layer_norm=args.use_layer_norm, use_rope_2d=args.use_rope_2d, use_ffn_residual=args.use_ffn_residual, 
     )
     kwargs.update(common_kwargs)
@@ -103,8 +104,12 @@ if __name__ == '__main__':
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {model_size}, {model_size / 1e6}M")    
     
-    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
-    rf = RF(model, time_sampling_type=time_sampling_type, noise_schedule=args.noise_schedule)
+    rf = RF(
+        model, 
+        timestep_sampling_type=args.timestep_sampling_type, 
+        prediction_target=args.prediction_target, 
+        noise_schedule=args.noise_schedule
+    )
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         
     # Resume from the previous run.
@@ -132,6 +137,7 @@ if __name__ == '__main__':
     )    
     
     dl_train = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True, drop_last=False, num_workers=4)
+    dl_train_eval = DataLoader(ds_train, batch_size=32, shuffle=True, drop_last=False, num_workers=4)
     dl_valid = DataLoader(ds_valid, batch_size=32, shuffle=False, drop_last=False, num_workers=4)
         
     save_weight_freq = args.sample_freq * 5
@@ -186,7 +192,7 @@ if __name__ == '__main__':
 
         rf.model.eval()
         with torch.no_grad():
-            _, x_src_train, label_tgt_train, label_a_train, label_b_train = next(iter(dl_train))
+            _, x_src_train, label_tgt_train, label_a_train, label_b_train = next(iter(dl_train_eval))
             _, x_src_valid, label_tgt_valid, label_a_valid, label_b_valid = next(iter(dl_valid))
             batch_size_train = x_src_train.size(0)
             batch_size_valid = x_src_valid.size(0)
@@ -242,7 +248,12 @@ if __name__ == '__main__':
                 save_sample_data(
                     args.dataset_name, args.p, x_src_train, samples_train[-1],
                     label_tgt_train, label_a_train, label_b_train,
-                    result_dir, f"sample_{epoch}_train(trn_{train_accuracy:.2f}-val_{valid_accuracy:.2f}).png"
+                    result_dir, f"sample_{epoch}_train(accy_{train_accuracy:.2f}).png"
+                )
+                save_sample_data(
+                    args.dataset_name, args.p, x_src_valid, samples_valid[-1],
+                    label_tgt_valid, label_a_valid, label_b_valid,
+                    result_dir, f"sample_{epoch}_valid(accy_{valid_accuracy:.2f}).png"
                 )
                     
                 curr_max_train_accuracy = max(curr_max_train_accuracy, train_accuracy)
@@ -262,7 +273,7 @@ if __name__ == '__main__':
                     torch.save(checkpoint, os.path.join(weight_dir, f"model_final.pth"))
                     f.close()
                     
-                    if not args.no_wandb_record:
+                    if not args.dry_run:
                         wandb.finish()
                     exit()
             else:
