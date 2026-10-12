@@ -1,4 +1,4 @@
-# A Mechanistic Study of Algorithmic Generalization in Diffusion Models
+# A Mechanistic Study of Algorithmic Generalization in Diffusion Models on Modular Addition
 
 [![arXiv](https://img.shields.io/badge/arXiv-2604.17673-b31b1b.svg)](https://arxiv.org/abs/2604.17673)
 [![ICLR DeLTa Workshop](https://img.shields.io/badge/ICLR%202026-DeLTa%20Workshop-blue.svg)](https://openreview.net/forum?id=rcpSrDLyBI)
