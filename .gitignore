@@ -14,3 +14,4 @@ venv/
 wandb/
 weights/
 scripts/cluster/
+scripts/analyses/diverse_image/*.sbatch

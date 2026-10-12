@@ -89,7 +89,7 @@ pip install -r requirements.txt
   - FFN's Pre-Activation Layer's result position $c$
     |FVE Barchart|FVE Heatmap|
     |:-:|:-:|
-    |![](results/analyses/single_image/single_image_analysis/260810_203235-dataset_name_emnist-p_23-num_images_per_class_1-patch_size_32-model_size_L-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_1/fve_plots/L20-layers.0.feed_forward_out.hook_pre_activation/Grid_bar_two_degree_neuron_level_var_c.png)|![](results/analyses/single_image/single_image_analysis/260810_203235-dataset_name_emnist-p_23-num_images_per_class_1-patch_size_32-model_size_L-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_1/fve_plots/L20-layers.0.feed_forward_out.hook_pre_activation/Grid_heatmap_neuron_level_var_c.png)|
+    |![](results/analyses/singe_image/single_image_analysis/260806_151530-dataset_name_emnist-p_23-num_images_per_class_1-patch_size_32-model_size_L-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_1/fve_plots/L20-layers.0.feed_forward_out.hook_pre_activation/Grid_bar_two_degree_neuron_level_var_c.png)|![](results/analyses/singe_image/single_image_analysis/260806_151530-dataset_name_emnist-p_23-num_images_per_class_1-patch_size_32-model_size_L-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_1/fve_plots/L20-layers.0.feed_forward_out.hook_pre_activation/Grid_heatmap_neuron_level_var_c.png)|
   - Trigonometry reconstruction Table
       |$W_L$|$u_k^\top \text{MLP}(a,b) \text{ and } v_k^\top \text{MLP}(a,b)$|FVE|
       |:-:|:-:|:-:|
@@ -126,9 +126,9 @@ pip install -r requirements.txt
     ```
 - Examples)
   - Sample and plot FVE barcharts   
-    ![](results/analyses/diverse_image/sample_and_plot/260811_041051-dataset_name_emnist-p_23-num_images_per_class_256-patch_size_32-model_size_XL-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_50/plot_fve/patch_0/00_animation.gif)
+    ![](results/analyses/diverse_image/sample_and_plot/261012_150437-emnist-p_23-num_images_per_class_256-patch_size_32-model_size_XL-x_pred-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_50/plot_fve/patch_0/00_animation.gif)
   - PCA visualization on result position $c$
-    ![](results/analyses/diverse_image/sample_and_plot/260811_041051-dataset_name_emnist-p_23-num_images_per_class_256-patch_size_32-model_size_XL-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_50/plot_pca/variable_c/patch_0/00_animation.gif)
+    ![](results/analyses/diverse_image/sample_and_plot/261012_150437-emnist-p_23-num_images_per_class_256-patch_size_32-model_size_XL-x_pred-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_50/plot_pca/variable_c/patch_0/00_animation.gif)
 
 <br>
 
@@ -143,8 +143,8 @@ pip install -r requirements.txt
    ```bash
    bash scripts/analyses/diverse_image/rectification_experiment.sh
    ```
-- Examples)   
-  ![](results/analyses/diverse_image/rectification_experiment/260811_015952-dataset_name_emnist-p_23-num_images_per_class_256-patch_size_32-model_size_XL-prediction_target_x-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_50/p_23-emnist-incorrect/entropy_accuracy_dynamics_fourier_fve.png)
+- Example)   
+  ![](results/analyses/diverse_image/rectification_experiment/261012_151910-emnist-p_23-num_images_per_class_256-patch_size_32-model_size_XL-x_pred-noise_schedule_linear-depth_1-ffn_type_gelu-sample_steps_50/p_23-emnist-incorrect/entropy_accuracy_dynamics_fourier_fve.png)
 
 
 <br>

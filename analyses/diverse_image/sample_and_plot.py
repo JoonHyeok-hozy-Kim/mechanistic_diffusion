@@ -108,10 +108,10 @@ if __name__ == '__main__':
     model.remove_all_hooks()
     model.cache_all(cache)
         
-    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
+    timestep_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
     rf = RF(
         model, 
-        time_sampling_type=time_sampling_type, 
+        timestep_sampling_type=timestep_sampling_type, 
         prediction_target=args.prediction_target, 
         noise_schedule=args.noise_schedule
     )

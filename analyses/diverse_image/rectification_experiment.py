@@ -114,10 +114,10 @@ if __name__ == '__main__':
     model.remove_all_hooks()
     model.cache_all(cache)
         
-    time_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
+    timestep_sampling_type = "uniform_skewed" if args.dataset_name == 'two_dimensional' else 'normal'
     rf = RF(
         model, 
-        time_sampling_type=time_sampling_type, 
+        timestep_sampling_type=timestep_sampling_type, 
         prediction_target=args.prediction_target, 
         noise_schedule=args.noise_schedule
     )
@@ -326,7 +326,7 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
         
     # ODE Failure timestep
-    ode_fail_threshold_val = 0.05
+    ode_fail_threshold_val = 0.001
     temp_ode_failure_tdx = -1
     temp_ode_failure_val = -1
     for t_idx, t_accuarcy in enumerate(ode_accuracies):
